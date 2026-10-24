@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS sales (
     market_hash_name TEXT    NOT NULL,
     source           TEXT    NOT NULL,
     ts               INTEGER NOT NULL,
-    median_cents     INTEGER NOT NULL,
+    median_cents     INTEGER,
     volume           INTEGER NOT NULL,
     currency         TEXT    NOT NULL,
     UNIQUE (market_hash_name, source, ts)

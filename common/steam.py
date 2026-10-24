@@ -99,11 +99,6 @@ class SteamAuthError(Exception):
     pass
 
 
-class SteamWrongCurrency(Exception):
-    """История продаж пришла не в USD (валюта кошелька аккаунта). Пересчитывать прошлые цены по
-    сегодняшнему курсу нельзя — это исказит данные, поэтому такую историю не сохраняем."""
-
-
 def parse_history_date(s: str) -> int:
     """'Oct 24 2026 01: +0' -> unix-время (UTC)."""
     from calendar import timegm
@@ -114,11 +109,15 @@ def parse_history_date(s: str) -> int:
 def parse_history(name: str, data: dict) -> list[SalePoint]:
     sym = (data.get("price_prefix") or data.get("price_suffix") or "").strip()
     currency = _CURRENCY_BY_SYMBOL.get(sym, sym or "USD")
+    # Храним только доллары. Если Steam отдал медиану в другой валюте (валюта/страна аккаунта, параметр
+    # currency он игнорирует), медиану отбрасываем: пересчёт прошлых цен по сегодняшнему курсу исказил бы
+    # данные. Число продаж от валюты не зависит, его сохраняем всегда.
+    usd = currency == "USD"
     out = []
     for row in data.get("prices") or []:
         date, median, volume = row[0], row[1], row[2]
-        out.append(SalePoint(name, parse_history_date(date), round(float(median) * 100),
-                             int(str(volume).replace(",", "")), currency))
+        out.append(SalePoint(name, parse_history_date(date), round(float(median) * 100) if usd else None,
+                             int(str(volume).replace(",", "")), "USD"))
     return out
 
 
@@ -133,9 +132,4 @@ async def fetch_price_history(client: AsyncSession, name: str, login_secure: str
     data = r.json()
     if not isinstance(data, dict) or not data.get("success"):
         raise SteamAuthError("pricehistory: success=false, cookie steamLoginSecure устарел или неверный")
-    points = parse_history(name, data)
-    if points and points[0].currency != "USD":
-        raise SteamWrongCurrency(
-            f"pricehistory отдаёт цены в {points[0].currency} (валюта кошелька аккаунта), а не в USD: "
-            "нужен cookie аккаунта с долларовым кошельком")
-    return points
+    return parse_history(name, data)

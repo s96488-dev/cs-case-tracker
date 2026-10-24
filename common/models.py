@@ -38,7 +38,7 @@ class SalePoint:
     Последние ~30 дней — по часам, раньше — по дням."""
     market_hash_name: str
     ts: int                        # начало периода, unix-время UTC
-    median_cents: int
+    median_cents: int | None       # медианная цена продаж в центах USD; None, если Steam отдал не доллары
     volume: int                    # сколько штук продано за период
     currency: str = "USD"
     source: str = "steam"

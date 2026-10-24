@@ -71,7 +71,7 @@ def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") ->
     tf = max(tf, 3600)
     rows = q(
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
-                  sum(median_cents::bigint * volume) / NULLIF(sum(volume), 0) AS median,
+                  sum(median_cents::bigint * volume) / NULLIF(sum(volume) FILTER (WHERE median_cents IS NOT NULL), 0) AS median,
                   avg(median_cents) AS median_plain,
                   sum(volume) AS volume, max(currency) AS currency
            FROM sales_history
@@ -79,8 +79,12 @@ def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") ->
              AND ts >= to_timestamp(%(start)s) AND ts < to_timestamp(%(end)s)
            GROUP BY 1 ORDER BY 1""",
         {"tf": tf, "id": item_id, "src": source, "start": start, "end": end})
-    return [{"time": r["time"], "median": round(float(r["median"] or r["median_plain"])) / 100,
-             "volume": int(r["volume"]), "currency": r["currency"]} for r in rows]
+    out = []
+    for r in rows:
+        m = r["median"] if r["median"] is not None else r["median_plain"]
+        out.append({"time": r["time"], "median": round(float(m)) / 100 if m is not None else None,
+                    "volume": int(r["volume"]), "currency": "USD"})
+    return out
 
 
 @app.get("/api/items")

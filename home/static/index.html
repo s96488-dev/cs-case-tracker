@@ -89,10 +89,7 @@ async function loadChart(fit) {
   // История продаж Steam идёт по часам, поэтому медиана и объём есть только на таймфреймах от 1ч.
   let hist = [];
   if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
-  const usd = hist.length && hist[0].currency === "USD";
-  median.applyOptions({ priceScaleId: usd ? "right" : "left", title: usd ? "медиана продаж" : `медиана продаж, ${hist[0]?.currency || ""}` });
-  chart.applyOptions({ leftPriceScale: { visible: !!hist.length && !usd } });
-  median.setData(hist.map(h => ({ time: h.time, value: h.median })));
+  median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume })));
   document.getElementById("hint").textContent = HOURLY.includes(tf)
     ? (hist.length ? "" : "Истории продаж пока нет: нужен cookie Steam в облаке.")
