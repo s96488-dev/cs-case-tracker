@@ -99,6 +99,11 @@ class SteamAuthError(Exception):
     pass
 
 
+class SteamWrongCurrency(Exception):
+    """История продаж пришла не в USD (валюта кошелька аккаунта). Пересчитывать прошлые цены по
+    сегодняшнему курсу нельзя — это исказит данные, поэтому такую историю не сохраняем."""
+
+
 def parse_history_date(s: str) -> int:
     """'Oct 24 2026 01: +0' -> unix-время (UTC)."""
     from calendar import timegm
@@ -118,7 +123,7 @@ def parse_history(name: str, data: dict) -> list[SalePoint]:
 
 
 async def fetch_price_history(client: AsyncSession, name: str, login_secure: str) -> list[SalePoint]:
-    r = await client.get(HISTORY_URL, params={"appid": 730, "market_hash_name": name},
+    r = await client.get(HISTORY_URL, params={"appid": 730, "market_hash_name": name, "currency": 1},
                          cookies={"steamLoginSecure": login_secure})
     if r.status_code == 429:
         raise SteamRateLimited("Steam ответил 429 на pricehistory")
@@ -128,4 +133,9 @@ async def fetch_price_history(client: AsyncSession, name: str, login_secure: str
     data = r.json()
     if not isinstance(data, dict) or not data.get("success"):
         raise SteamAuthError("pricehistory: success=false, cookie steamLoginSecure устарел или неверный")
-    return parse_history(name, data)
+    points = parse_history(name, data)
+    if points and points[0].currency != "USD":
+        raise SteamWrongCurrency(
+            f"pricehistory отдаёт цены в {points[0].currency} (валюта кошелька аккаунта), а не в USD: "
+            "нужен cookie аккаунта с долларовым кошельком")
+    return points

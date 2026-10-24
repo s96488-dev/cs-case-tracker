@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 
-from common.steam import SteamAuthError, SteamRateLimited, fetch_cases, fetch_price_history, make_client
+from common.steam import SteamAuthError, SteamRateLimited, SteamWrongCurrency, fetch_cases, fetch_price_history, make_client
 
 from . import config
 from .buffer import Buffer
@@ -38,7 +38,7 @@ async def run_history(buf: Buffer, client):
                 n = await asyncio.to_thread(buf.save_sales, name, points)
                 done += 1
                 log.info("история %s: %d точек, новых %d", name, len(points), n)
-            except SteamAuthError as e:
+            except (SteamAuthError, SteamWrongCurrency) as e:
                 error = str(e)
                 log.error("%s", e)
                 break  # без рабочего cookie нет смысла перебирать остальные кейсы
