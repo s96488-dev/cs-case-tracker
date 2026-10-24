@@ -12,4 +12,9 @@ if not exist .venv (
   py -3 -m venv .venv
   .venv\Scripts\pip install -r requirements-home.txt
 )
+rem Подтягиваем свежую версию из GitHub, если папка — клон репозитория.
+if exist .git (
+  git pull --ff-only
+  .venv\Scripts\pip install -q -r requirements-home.txt
+)
 .venv\Scripts\python -m home

@@ -57,6 +57,25 @@ Steam узнаёт по TLS-рукопожатию и сразу отвечае�
 | `home/static/index.html` | временная страница с графиком (Lightweight Charts), пока нет React |
 | `start-home.bat` | запуск домашней части на Windows |
 
+## Обновления через git
+
+Облачная машина — клон этого репозитория. Cron раз в 5 минут запускает `deploy/update.sh`: если в `main`
+появились новые коммиты, он делает `git reset --hard origin/main` и `docker compose up -d --build`.
+`.env` и `data/` в git не входят и не трогаются. Лог обновлений: `data/update.log`.
+Дома `start-home.bat` при каждом запуске делает `git pull` и доустанавливает зависимости.
+
+Одноразовая настройка машины (репозиторий приватный, поэтому нужен ключ только на чтение — deploy key):
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub
+# GitHub → репозиторий → Settings → Deploy keys → Add deploy key → вставить ключ (без write access)
+sudo apt-get install -y git
+cd ~/cs-case-tracker            # или git clone git@github.com:<owner>/cs-case-tracker.git на новой машине
+git init -q -b main 2>/dev/null; git remote add origin git@github.com:<owner>/cs-case-tracker.git
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+git fetch origin main && git reset --hard origin/main
+sh deploy/setup-vm.sh
+```
+
 ## 1. Облако: Google Cloud e2-micro (бесплатный тариф)
 
 1. Зайди в [console.cloud.google.com](https://console.cloud.google.com), создай проект и привяжи платёжный
