@@ -30,3 +30,15 @@ class PriceTick:
     listings: int | None = None    # сколько лотов выставлено на продажу
     currency: str = "USD"
     source: str = "steam"
+
+
+@dataclass
+class SalePoint:
+    """Точка истории продаж Steam (pricehistory): медианная цена и число продаж за период.
+    Последние ~30 дней — по часам, раньше — по дням."""
+    market_hash_name: str
+    ts: int                        # начало периода, unix-время UTC
+    median_cents: int | None       # медианная цена продаж в центах USD; None, если Steam отдал не доллары
+    volume: int                    # сколько штук продано за период
+    currency: str = "USD"
+    source: str = "steam"

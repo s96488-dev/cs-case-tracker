@@ -20,6 +20,7 @@
   main { flex:1; display:flex; flex-direction:column; min-width:0; }
   header { padding:12px 16px; display:flex; gap:12px; align-items:center; border-bottom:1px solid var(--line); }
   header h1 { font-size:16px; margin:0; flex:1; }
+  #hint { color:var(--muted); font-size:12px; }
   button { background:#232834; color:var(--text); border:1px solid var(--line); padding:4px 10px; border-radius:4px; cursor:pointer; }
   button.on { background:#2962ff; border-color:#2962ff; }
   #chart { flex:1; }
@@ -29,14 +30,15 @@
 <body>
 <aside id="list"></aside>
 <main>
-  <header><h1 id="title">Выберите кейс</h1><div id="tfs"></div></header>
+  <header><h1 id="title">Выберите кейс</h1><span id="hint"></span><div id="tfs"></div></header>
   <div id="chart"></div>
   <div id="status"></div>
 </main>
 <script src="lightweight-charts.standalone.production.js"></script>
 <script>
 const TFS = { "1м": "1", "5м": "5", "15м": "15", "1ч": "60", "4ч": "240", "1Д": "1D" };
-let current = null, tf = "5";
+let current = null, tf = "60";
+const HOURLY = ["60", "240", "1D"];
 
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
   autoSize: true,
@@ -46,7 +48,10 @@ const chart = LightweightCharts.createChart(document.getElementById("chart"), {
 });
 const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350", borderVisible: false,
   wickUpColor: "#26a69a", wickDownColor: "#ef5350", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
-const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "#3a4150" });
+const median = chart.addLineSeries({ color: "#f5a623", lineWidth: 2, priceLineVisible: false,
+  title: "медиана продаж", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "#3a4150",
+  title: "продано", priceLineVisible: false });
 chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 
 const tfs = document.getElementById("tfs");
@@ -81,15 +86,27 @@ async function loadChart(fit) {
   document.getElementById("title").textContent = current.market_hash_name;
   const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
   candles.setData(bars);
-  volume.setData(bars.map(b => ({ time: b.time, value: b.volume })));
-  if (fit) chart.timeScale().fitContent();
+  // История продаж Steam идёт по часам, поэтому медиана и объём есть только на таймфреймах от 1ч.
+  let hist = [];
+  if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
+  median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
+  volume.setData(hist.map(h => ({ time: h.time, value: h.volume })));
+  document.getElementById("hint").textContent = HOURLY.includes(tf)
+    ? (hist.length ? "" : "Истории продаж пока нет: нужен cookie Steam в облаке.")
+    : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.";
+  if (fit) {
+    // Свечи есть только с момента запуска сборщика, а история продаж — за годы: показываем последние ~200 баров.
+    const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
+    const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
+    if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
+  }
 }
 
 async function loadStatus() {
   const s = await (await fetch("/api/status")).json();
   document.getElementById("status").textContent =
     `Снимков в базе: ${s.ticks}. Последний: ${s.last_ts ? new Date(s.last_ts * 1000).toLocaleString() : "нет"}. ` +
-    `Объём на графике = лотов на продаже.`;
+    `Точек истории продаж: ${s.sales_points}. Свечи — минимальная цена продажи, оранжевая линия — медиана реальных продаж, столбики — сколько продано.`;
 }
 
 loadItems(); loadStatus();

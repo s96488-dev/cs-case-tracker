@@ -18,7 +18,20 @@ CREATE TABLE IF NOT EXISTS price_ticks (
     PRIMARY KEY (item_id, source, ts)
 );
 
--- Курсор синхронизации: id последней записи облачного буфера, сохранённой здесь.
+-- История продаж Steam (pricehistory): число продаж за час (раньше ~30 дней — за день) и медианная
+-- цена в центах USD. median_cents пустой, если Steam отдал историю не в долларах (валюта аккаунта).
+CREATE TABLE IF NOT EXISTS sales_history (
+    item_id      INTEGER     NOT NULL REFERENCES items(id),
+    source       TEXT        NOT NULL DEFAULT 'steam',
+    ts           TIMESTAMPTZ NOT NULL,
+    median_cents INTEGER,
+    volume       INTEGER     NOT NULL,
+    currency     TEXT        NOT NULL,
+    PRIMARY KEY (item_id, source, ts)
+);
+ALTER TABLE sales_history ALTER COLUMN median_cents DROP NOT NULL;
+
+-- Курсоры синхронизации: id последних записей облачного буфера (цены и продажи), сохранённых здесь.
 CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value BIGINT NOT NULL

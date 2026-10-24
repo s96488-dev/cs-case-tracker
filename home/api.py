@@ -44,8 +44,9 @@ def q(sql: str, args=()):
 
 
 def candles(item_id: int, tf: int, start: int, end: int, source: str = "steam") -> list[dict]:
-    """Свечи из минутных снимков: open/close — первый/последний снимок интервала,
-    volume — среднее число лотов на продаже (объём сделок search/render не отдаёт)."""
+    """Свечи из минутных снимков минимальной цены продажи: open/close — первый/последний снимок.
+    volume — настоящие продажи из истории Steam (есть только с шагом от часа, на меньших
+    таймфреймах 0), listings — среднее число лотов на продаже."""
     rows = q(
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
                   (array_agg(price_cents ORDER BY ts))[1]      AS o,
@@ -58,8 +59,32 @@ def candles(item_id: int, tf: int, start: int, end: int, source: str = "steam") 
              AND ts >= to_timestamp(%(start)s) AND ts < to_timestamp(%(end)s)
            GROUP BY 1 ORDER BY 1""",
         {"tf": tf, "id": item_id, "src": source, "start": start, "end": end})
+    vol = {}
+    if tf >= 3600:
+        vol = {r["time"]: r["volume"] for r in sales(item_id, tf, start, end, source)}
     return [{"time": r["time"], "open": r["o"] / 100, "high": r["h"] / 100, "low": r["l"] / 100,
-             "close": r["c"] / 100, "volume": r["v"] or 0} for r in rows]
+             "close": r["c"] / 100, "volume": vol.get(r["time"], 0), "listings": r["v"] or 0} for r in rows]
+
+
+def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") -> list[dict]:
+    """История продаж, сгруппированная по tf (не мельче часа): медиана, взвешенная по объёму, и сумма продаж."""
+    tf = max(tf, 3600)
+    rows = q(
+        """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
+                  sum(median_cents::bigint * volume) / NULLIF(sum(volume) FILTER (WHERE median_cents IS NOT NULL), 0) AS median,
+                  avg(median_cents) AS median_plain,
+                  sum(volume) AS volume, max(currency) AS currency
+           FROM sales_history
+           WHERE item_id = %(id)s AND source = %(src)s
+             AND ts >= to_timestamp(%(start)s) AND ts < to_timestamp(%(end)s)
+           GROUP BY 1 ORDER BY 1""",
+        {"tf": tf, "id": item_id, "src": source, "start": start, "end": end})
+    out = []
+    for r in rows:
+        m = r["median"] if r["median"] is not None else r["median_plain"]
+        out.append({"time": r["time"], "median": round(float(m)) / 100 if m is not None else None,
+                    "volume": int(r["volume"]), "currency": "USD"})
+    return out
 
 
 @app.get("/api/items")
@@ -87,10 +112,20 @@ def api_candles(item_id: int, tf: str = Query("60", description="1, 5, 15, 60, 2
     return candles(item_id, RESOLUTIONS[tf], start, end)
 
 
+@app.get("/api/sales")
+def api_sales(item_id: int, tf: str = Query("60", description="60, 240 (минуты) или 1D; мельче часа не бывает"),
+              start: int = 0, end: int | None = None):
+    if tf not in RESOLUTIONS:
+        raise HTTPException(400, f"tf должен быть одним из {list(RESOLUTIONS)}")
+    return sales(item_id, RESOLUTIONS[tf], start, end or int(time.time()) + 3600)
+
+
 @app.get("/api/status")
 def status():
     row = q("""SELECT count(*) AS ticks, extract(epoch FROM max(ts))::bigint AS last_ts,
-                      (SELECT value FROM sync_state WHERE key = 'cloud_cursor') AS cursor
+                      (SELECT value FROM sync_state WHERE key = 'cloud_cursor') AS cursor,
+                      (SELECT count(*) FROM sales_history) AS sales_points,
+                      (SELECT extract(epoch FROM max(ts))::bigint FROM sales_history) AS sales_last_ts
                FROM price_ticks""")[0]
     return row
 

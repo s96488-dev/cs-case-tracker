@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from common.models import Item, PriceTick
+from common.models import Item, PriceTick, SalePoint
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -26,6 +26,22 @@ CREATE TABLE IF NOT EXISTS ticks (
     currency         TEXT    NOT NULL,
     listings         INTEGER,
     UNIQUE (market_hash_name, source, ts)
+);
+CREATE TABLE IF NOT EXISTS sales (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_hash_name TEXT    NOT NULL,
+    source           TEXT    NOT NULL,
+    ts               INTEGER NOT NULL,
+    median_cents     INTEGER,
+    volume           INTEGER NOT NULL,
+    currency         TEXT    NOT NULL,
+    UNIQUE (market_hash_name, source, ts)
+);
+-- Последняя известная точка истории продаж по каждому предмету: чтобы не слать домой всю
+-- историю каждый час. Отдельно от sales, потому что sales чистится после подтверждения.
+CREATE TABLE IF NOT EXISTS sales_seen (
+    market_hash_name TEXT PRIMARY KEY,
+    last_ts          INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS fetch_log (
@@ -56,11 +72,41 @@ class Buffer:
                 [(t.market_hash_name, t.source, t.ts, t.price_cents, t.currency, t.listings) for t in ticks])
             return cur.rowcount
 
+    def case_names(self) -> list[str]:
+        with self.lock:
+            return [r[0] for r in self.conn.execute(
+                "SELECT market_hash_name FROM items WHERE item_type = 'case' ORDER BY market_hash_name")]
+
+    def save_sales(self, name: str, points: list[SalePoint], revise_hours: int = 3) -> int:
+        """Кладёт в буфер новые точки истории продаж. Последние revise_hours часов Steam ещё
+        дописывает (текущий час растёт), поэтому их перезаписываем с новым id — дом заберёт заново."""
+        with self.lock, self.conn:
+            row = self.conn.execute("SELECT last_ts FROM sales_seen WHERE market_hash_name = ?", (name,)).fetchone()
+            since = row[0] - revise_hours * 3600 if row else -1
+            fresh = [p for p in points if p.ts >= since]
+            for p in fresh:
+                self.conn.execute("DELETE FROM sales WHERE market_hash_name=? AND source=? AND ts=?",
+                                  (p.market_hash_name, p.source, p.ts))
+            self.conn.executemany(
+                """INSERT INTO sales (market_hash_name, source, ts, median_cents, volume, currency)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [(p.market_hash_name, p.source, p.ts, p.median_cents, p.volume, p.currency) for p in fresh])
+            if points:
+                self.conn.execute("INSERT OR REPLACE INTO sales_seen VALUES (?, ?)", (name, max(p.ts for p in points)))
+            return len(fresh)
+
     def log_fetch(self, ts: int, ok: bool, items: int = 0, error: str | None = None):
         with self.lock, self.conn:
             self.conn.execute("INSERT INTO fetch_log (ts, ok, items, error) VALUES (?,?,?,?)",
                               (ts, int(ok), items, error))
             self.conn.execute("DELETE FROM fetch_log WHERE ts < ?", (ts - 7 * 86400,))
+
+    def read_sales(self, after_id: int, limit: int) -> dict:
+        with self.lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM sales WHERE id > ? ORDER BY id LIMIT ?", (after_id, limit))]
+            max_id = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM sales").fetchone()[0]
+        return {"sales": rows, "max_id": max_id, "has_more": bool(rows) and rows[-1]["id"] < max_id}
 
     def read(self, after_id: int, limit: int) -> dict:
         with self.lock:
@@ -73,12 +119,12 @@ class Buffer:
         return {"ticks": ticks, "items": items, "max_id": max_id,
                 "has_more": bool(ticks) and ticks[-1]["id"] < max_id}
 
-    def ack(self, up_to_id: int):
+    def ack(self, up_to_id: int, key: str = "acked_id"):
         with self.lock, self.conn:
             self.conn.execute(
-                """INSERT INTO state VALUES ('acked_id', ?) ON CONFLICT(key) DO UPDATE
+                """INSERT INTO state VALUES (?, ?) ON CONFLICT(key) DO UPDATE
                    SET value = MAX(CAST(state.value AS INTEGER), CAST(excluded.value AS INTEGER))""",
-                (str(up_to_id),))
+                (key, str(up_to_id)))
             self.conn.execute("INSERT OR REPLACE INTO state VALUES ('acked_at', ?)", (str(int(time.time())),))
 
     def prune(self, retention_hours: int, max_days: int) -> int:
@@ -88,6 +134,9 @@ class Buffer:
             n = self.conn.execute("DELETE FROM ticks WHERE id <= ? AND ts < ?",
                                   (acked, now - retention_hours * 3600)).rowcount
             n += self.conn.execute("DELETE FROM ticks WHERE ts < ?", (now - max_days * 86400,)).rowcount
+            # Историю продаж (она бывает за годы) удаляем по времени поступления, а не по ts точки.
+            sacked = int(self._state("sales_acked_id") or 0)
+            n += self.conn.execute("DELETE FROM sales WHERE id <= ?", (sacked,)).rowcount
         return n
 
     def _state(self, key: str) -> str | None:
@@ -109,4 +158,15 @@ class Buffer:
                 "last_success_at": last_ok,
                 "last_fetch": dict(last) if last else None,
                 "fetches_24h": day[0], "successful_24h": day[1],
+                "pending_sales": self.conn.execute("SELECT COUNT(*) FROM sales WHERE id > ?",
+                                                   (int(self._state("sales_acked_id") or 0),)).fetchone()[0],
+                "history_last_ok_at": int(self._state("history_ok_at") or 0) or None,
+                "history_last_error": self._state("history_error"),
             }
+
+    def set_state(self, key: str, value: str | None):
+        with self.lock, self.conn:
+            if value is None:
+                self.conn.execute("DELETE FROM state WHERE key = ?", (key,))
+            else:
+                self.conn.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, value))
