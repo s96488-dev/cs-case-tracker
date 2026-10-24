@@ -51,11 +51,20 @@ def ticks(after_id: int = 0, limit: int = Query(5000, le=20000)):
     return buf.read(after_id, limit)
 
 
+@app.get("/api/sales", dependencies=[Depends(auth)])
+def sales(after_id: int = 0, limit: int = Query(5000, le=20000)):
+    return buf.read_sales(after_id, limit)
+
+
 class Ack(BaseModel):
-    up_to_id: int
+    up_to_id: int | None = None        # цены (ticks)
+    sales_up_to_id: int | None = None  # история продаж
 
 
 @app.post("/api/ack", dependencies=[Depends(auth)])
 def ack(body: Ack):
-    buf.ack(body.up_to_id)
+    if body.up_to_id is not None:
+        buf.ack(body.up_to_id)
+    if body.sales_up_to_id is not None:
+        buf.ack(body.sales_up_to_id, "sales_acked_id")
     return {"ok": True}

@@ -14,7 +14,7 @@ import os
 
 from curl_cffi.requests import AsyncSession
 
-from .models import Case, PriceTick
+from .models import Case, PriceTick, SalePoint
 
 SEARCH_URL = "https://steamcommunity.com/market/search/render/"
 log = logging.getLogger("steam")
@@ -83,3 +83,49 @@ def make_client(proxy: str | None = None) -> AsyncSession:
     (httpx, requests, urllib) Steam распознаёт по TLS-рукопожатию и отвечает им 429."""
     return AsyncSession(impersonate=IMPERSONATE, timeout=30, proxy=proxy,
                         headers={"Accept-Language": "en-US,en;q=0.9"})
+
+
+# ---------- История продаж (нужен логин) ----------
+
+HISTORY_URL = "https://steamcommunity.com/market/pricehistory/"
+_MONTHS = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+# pricehistory отдаёт цены в валюте кошелька аккаунта, параметр currency игнорирует.
+_CURRENCY_BY_SYMBOL = {"$": "USD", "€": "EUR", "£": "GBP", "₴": "UAH", "pуб.": "RUB", "руб.": "RUB",
+                       "₸": "KZT", "zł": "PLN", "¥": "CNY", "R$": "BRL", "₺": "TRY", "CHF": "CHF"}
+
+
+class SteamAuthError(Exception):
+    pass
+
+
+def parse_history_date(s: str) -> int:
+    """'Oct 24 2026 01: +0' -> unix-время (UTC)."""
+    from calendar import timegm
+    mon, day, year, hour = s.split()[:4]
+    return timegm((int(year), _MONTHS[mon], int(day), int(hour.rstrip(":")), 0, 0))
+
+
+def parse_history(name: str, data: dict) -> list[SalePoint]:
+    sym = (data.get("price_prefix") or data.get("price_suffix") or "").strip()
+    currency = _CURRENCY_BY_SYMBOL.get(sym, sym or "USD")
+    out = []
+    for row in data.get("prices") or []:
+        date, median, volume = row[0], row[1], row[2]
+        out.append(SalePoint(name, parse_history_date(date), round(float(median) * 100),
+                             int(str(volume).replace(",", "")), currency))
+    return out
+
+
+async def fetch_price_history(client: AsyncSession, name: str, login_secure: str) -> list[SalePoint]:
+    r = await client.get(HISTORY_URL, params={"appid": 730, "market_hash_name": name},
+                         cookies={"steamLoginSecure": login_secure})
+    if r.status_code == 429:
+        raise SteamRateLimited("Steam ответил 429 на pricehistory")
+    if r.status_code in (400, 401, 403):
+        raise SteamAuthError(f"pricehistory: HTTP {r.status_code}, cookie steamLoginSecure устарел или неверный")
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict) or not data.get("success"):
+        raise SteamAuthError("pricehistory: success=false, cookie steamLoginSecure устарел или неверный")
+    return parse_history(name, data)

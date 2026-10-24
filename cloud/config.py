@@ -10,3 +10,9 @@ RETENTION_HOURS = int(os.getenv("RETENTION_HOURS", "72"))
 # Если дом не забирал данные дольше, самые старые записи удаляются после стольких дней.
 MAX_DAYS = int(os.getenv("MAX_DAYS", "60"))
 STEAM_PROXY = os.getenv("STEAM_PROXY") or None
+# Cookie steamLoginSecure залогиненного аккаунта Steam: нужен для истории продаж (pricehistory).
+# Пусто — история продаж не собирается, остальное работает.
+STEAM_LOGIN_SECURE = os.getenv("STEAM_LOGIN_SECURE", "").strip()
+# Как часто обновлять историю продаж (секунды) и пауза между кейсами внутри одного прохода.
+HISTORY_INTERVAL = int(os.getenv("HISTORY_INTERVAL", "3600"))
+HISTORY_PAUSE = float(os.getenv("HISTORY_PAUSE", "6"))
