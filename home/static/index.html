@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS2 кейсы — цены Steam</title>
+<!-- Временная страница для проверки данных. Полноценный фронт будет на React. -->
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8a8f98; --up:#26a69a; --down:#ef5350; --line:#252a33; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; }
+  aside { width:320px; border-right:1px solid var(--line); overflow:auto; background:var(--panel); }
+  aside .row { display:flex; gap:8px; align-items:center; padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); }
+  aside .row:hover, aside .row.active { background:#1f2430; }
+  aside img { width:36px; height:28px; object-fit:contain; }
+  .name { flex:1; }
+  .price { text-align:right; font-variant-numeric:tabular-nums; }
+  .chg { font-size:12px; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  header { padding:12px 16px; display:flex; gap:12px; align-items:center; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  button { background:#232834; color:var(--text); border:1px solid var(--line); padding:4px 10px; border-radius:4px; cursor:pointer; }
+  button.on { background:#2962ff; border-color:#2962ff; }
+  #chart { flex:1; }
+  #status { color:var(--muted); font-size:12px; padding:6px 16px; border-top:1px solid var(--line); }
+</style>
+</head>
+<body>
+<aside id="list"></aside>
+<main>
+  <header><h1 id="title">Выберите кейс</h1><div id="tfs"></div></header>
+  <div id="chart"></div>
+  <div id="status"></div>
+</main>
+<script src="lightweight-charts.standalone.production.js"></script>
+<script>
+const TFS = { "1м": "1", "5м": "5", "15м": "15", "1ч": "60", "4ч": "240", "1Д": "1D" };
+let current = null, tf = "5";
+
+const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  autoSize: true,
+  layout: { background: { color: "#0f1115" }, textColor: "#c7c7c7" },
+  grid: { vertLines: { color: "#1c2029" }, horzLines: { color: "#1c2029" } },
+  timeScale: { timeVisible: true, secondsVisible: false },
+});
+const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350", borderVisible: false,
+  wickUpColor: "#26a69a", wickDownColor: "#ef5350", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "#3a4150" });
+chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+
+const tfs = document.getElementById("tfs");
+for (const [label, val] of Object.entries(TFS)) {
+  const b = document.createElement("button");
+  b.textContent = label; b.dataset.tf = val;
+  b.onclick = () => { tf = val; renderTfs(); loadChart(true); };
+  tfs.appendChild(b);
+}
+function renderTfs() { for (const b of tfs.children) b.classList.toggle("on", b.dataset.tf === tf); }
+renderTfs();
+
+async function loadItems() {
+  const items = await (await fetch("/api/items")).json();
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  for (const it of items) {
+    const chg = it.price_24h ? (it.price / it.price_24h - 1) * 100 : 0;
+    const row = document.createElement("div");
+    row.className = "row" + (current && current.id === it.id ? " active" : "");
+    row.innerHTML = `<img src="${it.icon_url || ""}" alt=""><span class="name"></span>
+      <span class="price">$${it.price.toFixed(2)}<br><span class="chg ${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span></span>`;
+    row.querySelector(".name").textContent = it.market_hash_name;
+    row.onclick = () => { current = it; loadItems(); loadChart(true); };
+    list.appendChild(row);
+  }
+  if (!current && items.length) { current = items[0]; loadItems(); loadChart(true); }
+}
+
+async function loadChart(fit) {
+  if (!current) return;
+  document.getElementById("title").textContent = current.market_hash_name;
+  const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
+  candles.setData(bars);
+  volume.setData(bars.map(b => ({ time: b.time, value: b.volume })));
+  if (fit) chart.timeScale().fitContent();
+}
+
+async function loadStatus() {
+  const s = await (await fetch("/api/status")).json();
+  document.getElementById("status").textContent =
+    `Снимков в базе: ${s.ticks}. Последний: ${s.last_ts ? new Date(s.last_ts * 1000).toLocaleString() : "нет"}. ` +
+    `Объём на графике = лотов на продаже.`;
+}
+
+loadItems(); loadStatus();
+setInterval(() => { loadItems(); loadChart(false); loadStatus(); }, 60000);
+</script>
+</body>
+</html>

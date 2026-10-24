@@ -1,0 +1,24 @@
+# Облако: сборщик + Caddy (HTTPS с автоматическим сертификатом Let's Encrypt).
+# Перед запуском создайте файл .env рядом (см. .env.example).
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - collector
+volumes:
+  caddy_data:

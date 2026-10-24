@@ -1,0 +1,5 @@
+data/
+.env
+home/env.bat
+.venv/
+__pycache__/
