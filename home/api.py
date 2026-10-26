@@ -4,6 +4,7 @@
   /api/candles   OHLC-свечи для TradingView Lightweight Charts
   /api/news      новости Valve, связанные с кейсом
   /api/ev        EV кейса по дням (ожидаемая стоимость открытия)
+  /api/drop      активный дроп кейса: дата ухода или прогноз ухода
   /udf/*         UDF-датафид для полной библиотеки TradingView Charting Library
 
 Запуск: python -m home
@@ -16,6 +17,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+from common import drop_pool
 
 from . import ev, news, sync
 from .db import ensure_database, open_pool, pool
@@ -129,6 +132,14 @@ def api_ev(item_id: int):
     """EV по дням в долларах и покрытие (доля вероятности предметов с известной ценой)."""
     return q("""SELECT extract(epoch FROM day)::bigint AS time, ev_cents / 100.0 AS ev, coverage
                 FROM case_ev WHERE item_id = %s ORDER BY day""", (item_id,))
+
+
+@app.get("/api/drop")
+def api_drop(item_id: int):
+    """Активный дроп: когда кейс вышел, когда ушёл из активного дропа, а для ещё активных — прогноз ухода
+    (дата выхода + средний срок прошлых обычных кейсов). Для ивентовых и прочих кейсов — null."""
+    rows = q("SELECT market_hash_name FROM items WHERE id = %s", (item_id,))
+    return drop_pool.info(rows[0]["market_hash_name"]) if rows else None
 
 
 @app.get("/api/news")
