@@ -23,6 +23,12 @@
   #hint { color:var(--muted); font-size:12px; }
   button { background:#232834; color:var(--text); border:1px solid var(--line); padding:4px 10px; border-radius:4px; cursor:pointer; }
   button.on { background:#2962ff; border-color:#2962ff; }
+  #tools { padding:6px 16px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; border-bottom:1px solid var(--line); color:var(--muted); font-size:12px; }
+  #tools label { display:flex; gap:4px; align-items:center; }
+  #tools .grp { display:flex; gap:4px; align-items:center; }
+  #tools input[type=number], #tools select { background:#232834; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:3px 4px; font-size:12px; }
+  #tools input[type=number] { width:58px; }
+  #tools button { padding:3px 8px; font-size:12px; }
   #chart { flex:1; }
   #ratioBox { height:150px; border-top:1px solid var(--line); position:relative; }
   #ratio { position:absolute; inset:0; }
@@ -49,6 +55,19 @@
 <aside id="list"></aside>
 <main>
   <header><h1 id="title">Выберите кейс</h1><span id="hint"></span><div id="tfs"></div></header>
+  <div id="tools">
+    <span class="grp">EV: сглаживание
+      <select id="smType"><option value="">нет</option><option value="sma">SMA</option><option value="ema">EMA</option></select>
+      <input id="smLen" type="number" min="2" max="365" value="7" title="Период в днях"></span>
+    <label title="Открытие стоит кейс + ключ: вычитаем цену ключа из EV"><input id="keyOn" type="checkbox">минус ключ $<input id="keyPrice" type="number" min="0" step="0.01" value="2.49"></label>
+    <label title="При продаже скина Steam и игра забирают ~13%: продавец получает цену / 1.15"><input id="feeOn" type="checkbox">минус комиссия Steam</label>
+    <span class="grp">Шкала
+      <button id="scAuto" title="Автомасштаб по видимым данным (как кнопка A в TradingView)">Авто</button>
+      <button id="scLog" title="Логарифмическая шкала">Лог</button>
+      <button id="scPct" title="Проценты от первого видимого бара: цена и EV стартуют из одной точки">%</button>
+      <button id="scSep" title="EV на своей шкале слева: обе линии растягиваются на всю высоту">EV слева</button>
+      <button id="scFit" title="Показать всю историю">Вся история</button></span>
+  </div>
   <div id="chart"></div>
   <div id="ratioBox"><div id="ratioLabel">Цена / EV: выше 1 — кейс дороже того, что из него в среднем выпадает</div><div id="ratio"></div></div>
   <div id="status"></div>
@@ -76,6 +95,9 @@ chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 // EV — ожидаемая стоимость открытия: сумма «цена предмета по последним 10 продажам × шанс выпадения».
 const evLine = chart.addLineSeries({ color: "#4fc3f7", lineWidth: 2, priceLineVisible: false,
   title: "EV", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+// Несглаженный EV тонкой бледной линией под сглаженным.
+const evRaw = chart.addLineSeries({ color: "rgba(79,195,247,0.35)", lineWidth: 1, priceLineVisible: false,
+  lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
 
 // Нижняя панель: отношение цены кейса (медиана продаж) к EV, синхронизирована по времени с основным графиком.
 const ratioChart = LightweightCharts.createChart(document.getElementById("ratio"), {
@@ -89,6 +111,68 @@ chart.applyOptions({ rightPriceScale: { minimumWidth: 70 } });
 const ratioLine = ratioChart.addLineSeries({ color: "#ce93d8", lineWidth: 2, priceLineVisible: false,
   priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
 ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
+// Настройки индикатора и шкалы, запоминаются в браузере.
+const opts = { smType: "", smLen: 7, keyOn: false, keyPrice: 2.49, feeOn: false, log: false, pct: false, sep: false };
+try { Object.assign(opts, JSON.parse(localStorage.getItem("evOpts") || "{}")); } catch (e) {}
+const $ = id => document.getElementById(id);
+function saveOpts() { try { localStorage.setItem("evOpts", JSON.stringify(opts)); } catch (e) {} }
+function applyScale() {
+  const mode = opts.pct ? LightweightCharts.PriceScaleMode.Percentage
+    : opts.log ? LightweightCharts.PriceScaleMode.Logarithmic : LightweightCharts.PriceScaleMode.Normal;
+  chart.applyOptions({ leftPriceScale: { visible: opts.sep, mode, minimumWidth: 70 }, rightPriceScale: { mode } });
+  for (const s of [evLine, evRaw]) s.applyOptions({ priceScaleId: opts.sep ? "left" : "right" });
+  $("scLog").classList.toggle("on", opts.log); $("scPct").classList.toggle("on", opts.pct); $("scSep").classList.toggle("on", opts.sep);
+}
+$("smType").value = opts.smType; $("smLen").value = opts.smLen; $("keyOn").checked = opts.keyOn;
+$("keyPrice").value = opts.keyPrice; $("feeOn").checked = opts.feeOn;
+for (const id of ["smType", "smLen", "keyOn", "keyPrice", "feeOn"]) $(id).onchange = () => {
+  opts.smType = $("smType").value; opts.smLen = Math.max(2, parseInt($("smLen").value) || 7);
+  opts.keyOn = $("keyOn").checked; opts.keyPrice = parseFloat($("keyPrice").value) || 0; opts.feeOn = $("feeOn").checked;
+  saveOpts(); renderEv();
+};
+$("scLog").onclick = () => { opts.log = !opts.log; opts.pct = false; saveOpts(); applyScale(); };
+$("scPct").onclick = () => { opts.pct = !opts.pct; opts.log = false; saveOpts(); applyScale(); };
+$("scSep").onclick = () => { opts.sep = !opts.sep; saveOpts(); applyScale(); };
+$("scAuto").onclick = () => { for (const id of ["left", "right"]) chart.priceScale(id).applyOptions({ autoScale: true });
+  ratioChart.priceScale("right").applyOptions({ autoScale: true }); };
+$("scFit").onclick = () => chart.timeScale().fitContent();
+applyScale();
+
+function smooth(data) {
+  const n = opts.smLen;
+  if (!opts.smType || data.length < 2) return data;
+  if (opts.smType === "ema") {
+    const k = 2 / (n + 1); let prev = null;
+    return data.map(d => ({ time: d.time, value: prev = prev === null ? d.value : prev + k * (d.value - prev) }));
+  }
+  let sum = 0;
+  return data.map((d, i) => { sum += d.value; if (i >= n) sum -= data[i - n].value;
+    return { time: d.time, value: sum / Math.min(i + 1, n) }; });
+}
+
+// Последние загруженные данные: при смене настроек индикатора перерисовываем без запросов.
+let evData = [], hist = [];
+function renderEv() {
+  const fee = opts.feeOn ? 1 / 1.15 : 1, key = opts.keyOn ? opts.keyPrice : 0;
+  const raw = evData.map(e => ({ time: e.time, value: e.ev }));
+  const sm = smooth(raw);
+  evLine.setData(sm.map(d => ({ time: d.time, value: d.value * fee - key })));
+  evRaw.setData(opts.smType ? raw.map(d => ({ time: d.time, value: d.value * fee - key })) : []);
+  evLine.applyOptions({ title: "EV" + (opts.smType ? ` ${opts.smType.toUpperCase()} ${opts.smLen}` : "")
+    + (key ? " − ключ" : "") + (fee < 1 ? " − комиссия" : "") });
+  // Отношение: сколько стоит открыть (кейс + ключ, если включён) к тому, что в среднем выпадет (после комиссии).
+  const evByDay = new Map(sm.map(d => [d.time, d.value * fee]));
+  const evAt = t => evByDay.get(Math.floor(t / 86400) * 86400);
+  ratioLine.setData(hist.filter(h => h.median !== null && evAt(h.time))
+    .map(h => ({ time: h.time, value: (h.median + key) / evAt(h.time) })));
+  const lastEv = evData[evData.length - 1];
+  const what = key ? "(кейс + ключ) / EV" : "Цена / EV";
+  $("ratioLabel").textContent = lastEv
+    ? `${what}${fee < 1 ? " после комиссии" : ""}. EV сейчас $${lastEv.ev.toFixed(2)}, посчитано ${(lastEv.coverage * 100).toFixed(0)}% вероятности. `
+      + (key ? "Ниже 1 — открывать выгодно в среднем" : "Выше 1 — кейс дороже того, что из него в среднем выпадает")
+    : "Цена / EV: EV этого кейса ещё не посчитан (облако собирает цены предметов кейс за кейсом)";
+}
+
 let syncing = false;
 chart.timeScale().subscribeVisibleTimeRangeChange(r => {
   if (!r || syncing) return;
@@ -130,23 +214,16 @@ async function loadChart(fit) {
   const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
   candles.setData(bars);
   // История продаж Steam идёт по часам, поэтому медиана и объём есть только на таймфреймах от 1ч.
-  let hist = [];
+  hist = [];
   if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
   median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
   // Старше ~30 дней Steam хранит продажи только по дням: на 1ч и 4ч такой столбик — продажи за целые сутки,
   // поэтому он выше часовых. Красим их иначе, чтобы не путать.
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume, color: h.daily ? "#5c4a2a" : "#3a4150" })));
   // EV есть по дням; на 1ч и 4ч линия идёт ступеньками по дням.
-  let evData = [];
+  evData = [];
   if (HOURLY.includes(tf)) evData = await (await fetch(`/api/ev?item_id=${current.id}`)).json();
-  evLine.setData(evData.map(e => ({ time: e.time, value: e.ev })));
-  const evByDay = new Map(evData.map(e => [e.time, e.ev]));
-  ratioLine.setData(hist.filter(h => h.median !== null && evByDay.get(Math.floor(h.time / 86400) * 86400))
-    .map(h => ({ time: h.time, value: h.median / evByDay.get(Math.floor(h.time / 86400) * 86400) })));
-  const lastEv = evData[evData.length - 1];
-  document.getElementById("ratioLabel").textContent = lastEv
-    ? `Цена / EV. EV сейчас $${lastEv.ev.toFixed(2)}, посчитано ${(lastEv.coverage * 100).toFixed(0)}% вероятности. Выше 1 — кейс дороже того, что из него в среднем выпадает`
-    : "Цена / EV: EV ещё не посчитан (облако собирает цены предметов из кейсов, первый круг около суток)";
+  renderEv();
   // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
   const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
   const target = HOURLY.includes(tf) ? volume : candles;

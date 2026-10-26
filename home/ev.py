@@ -15,6 +15,7 @@ from . import config
 from .db import pool
 
 log = logging.getLogger("ev")
+MIN_COVERAGE = 0.8
 
 
 def _epoch(d) -> int:
@@ -41,6 +42,9 @@ def compute_all(contents: dict[str, dict[str, float]]) -> int:
             item_days.setdefault(r["market_hash_name"], []).append((_epoch(r["day"]), r["median_cents"], r["volume"]))
         start = min(d[0][0] for d in item_days.values())
         series = case_ev(probs, item_days, start, today)
+        # Облако собирает кейсы по очереди: пока цены кейса собраны не полностью, EV занижен — не показываем.
+        if not series or series[-1][2] < MIN_COVERAGE:
+            continue
         with pool.connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM case_ev WHERE item_id = %s", (case["id"],))
             cur.executemany("INSERT INTO case_ev VALUES (%s, %s, %s, %s)",
