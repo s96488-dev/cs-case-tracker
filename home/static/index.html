@@ -121,7 +121,8 @@ async function loadChart(fit) {
 
 let newsItems = [];
 // Текст новостей Steam приходит в BBCode/HTML: для панели оставляем только текст.
-const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[\/?(p|br|list|olist|\*|h\d)\]/g, "\n")
+const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[img\][\s\S]*?\[\/img\]/gi, "")
+  .replace(/<img[^>]*>/gi, "").replace(/https?:\/\/\S+\.(png|jpe?g|gif|webp)\S*/gi, "").replace(/\[\/?(p|br|list|olist|\*|h\d)\]/g, "\n")
   .replace(/\[[^\]]*\]/g, "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim();
 
 async function loadNews() {
