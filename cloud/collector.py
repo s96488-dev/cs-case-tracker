@@ -37,7 +37,19 @@ class SteamLogin:
         self.buf, self.client = buf, client
         # Берём тот из двух токенов (сохранённый в буфере или из .env), что живёт дольше:
         # так свежий cookie, вписанный в .env руками, не перекрывается старым из буфера.
-        self.value = max([buf.get_state("login_secure") or "", config.STEAM_LOGIN_SECURE], key=self._exp)
+        candidates = [buf.get_state("login_secure") or "", config.STEAM_LOGIN_SECURE]
+        # Если refresh token от другого аккаунта (его сменили), старые токены не подходят.
+        if config.STEAM_REFRESH_TOKEN:
+            owner = split_login_cookie(config.STEAM_REFRESH_TOKEN)[0]
+            candidates = [c for c in candidates if self._steamid(c) == owner]
+        self.value = max(candidates + [""], key=self._exp)
+
+    @staticmethod
+    def _steamid(value: str) -> str | None:
+        try:
+            return split_login_cookie(value)[0]
+        except Exception:
+            return None
 
     @staticmethod
     def _exp(value: str) -> int:
