@@ -3,3 +3,4 @@ data/
 home/env.bat
 .venv/
 __pycache__/
+home.log
