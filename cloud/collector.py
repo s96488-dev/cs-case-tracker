@@ -51,7 +51,7 @@ class SteamLogin:
 
     async def get(self, force_refresh: bool = False) -> str:
         if config.STEAM_REFRESH_TOKEN and (force_refresh or self.expires_at() < time.time() + 7200):
-            self.value = await refresh_login_secure(self.client, config.STEAM_REFRESH_TOKEN)
+            self.value = await refresh_login_secure(config.STEAM_REFRESH_TOKEN, config.STEAM_PROXY)
             await asyncio.to_thread(self.buf.set_state, "login_secure", self.value)
             log.info("токен Steam продлён до %s UTC",
                      time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.expires_at())))
