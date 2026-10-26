@@ -26,7 +26,13 @@
   #chart { flex:1; }
   #status { color:var(--muted); font-size:12px; padding:6px 16px; border-top:1px solid var(--line); }
   #news { width:340px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
-  #news h2 { font-size:14px; margin:0; padding:12px; border-bottom:1px solid var(--line); }
+  #news h2 { font-size:14px; margin:0; padding:8px 8px 8px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; }
+  #news h2 span { flex:1; }
+  #news.collapsed { width:32px; overflow:hidden; cursor:pointer; }
+  #news.collapsed h2 { border:0; padding:8px 4px; flex-direction:column; }
+  #news.collapsed h2 span { display:none; }
+  #news.collapsed h2::after { content:"Новости"; writing-mode:vertical-rl; color:var(--muted); font-weight:normal; }
+  #news.collapsed #newsList { display:none; }
   #news .item { padding:10px 12px; border-bottom:1px solid var(--line); }
   #news .date { color:var(--muted); font-size:12px; }
   #news a { color:#8ab4ff; text-decoration:none; }
@@ -43,7 +49,7 @@
   <div id="chart"></div>
   <div id="status"></div>
 </main>
-<section id="news"><h2>Новости Valve по кейсу</h2><div id="newsList"></div></section>
+<section id="news"><h2><span>Новости Valve по кейсу</span><button id="newsToggle" title="Свернуть / развернуть">»</button></h2><div id="newsList"></div></section>
 <script src="lightweight-charts.standalone.production.js"></script>
 <script>
 const TFS = { "1м": "1", "5м": "5", "15м": "15", "1ч": "60", "4ч": "240", "1Д": "1D" };
@@ -120,6 +126,16 @@ async function loadChart(fit) {
 }
 
 let newsItems = [];
+// Панель новостей сворачивается вправо в узкую полоску; состояние запоминается в браузере.
+const newsPanel = document.getElementById("news"), newsToggle = document.getElementById("newsToggle");
+function setNewsCollapsed(c) {
+  newsPanel.classList.toggle("collapsed", c);
+  newsToggle.textContent = c ? "«" : "»";
+  try { localStorage.setItem("newsCollapsed", c ? "1" : "0"); } catch (e) {}
+}
+newsToggle.onclick = e => { e.stopPropagation(); setNewsCollapsed(!newsPanel.classList.contains("collapsed")); };
+newsPanel.onclick = () => { if (newsPanel.classList.contains("collapsed")) setNewsCollapsed(false); };
+try { setNewsCollapsed(localStorage.getItem("newsCollapsed") === "1"); } catch (e) {}
 // Текст новостей Steam приходит в BBCode/HTML: для панели оставляем только текст.
 const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[img\][\s\S]*?\[\/img\]/gi, "")
   .replace(/<img[^>]*>/gi, "").replace(/https?:\/\/\S+\.(png|jpe?g|gif|webp)\S*/gi, "").replace(/\[\/?(p|br|list|olist|\*|h\d)\]/g, "\n")
