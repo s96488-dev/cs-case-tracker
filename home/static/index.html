@@ -106,7 +106,9 @@ async function loadChart(fit) {
   let hist = [];
   if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
   median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
-  volume.setData(hist.map(h => ({ time: h.time, value: h.volume })));
+  // Старше ~30 дней Steam хранит продажи только по дням: на 1ч и 4ч такой столбик — продажи за целые сутки,
+  // поэтому он выше часовых. Красим их иначе, чтобы не путать.
+  volume.setData(hist.map(h => ({ time: h.time, value: h.volume, color: h.daily ? "#5c4a2a" : "#3a4150" })));
   // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
   const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
   const target = HOURLY.includes(tf) ? volume : candles;
@@ -116,7 +118,8 @@ async function loadChart(fit) {
   target.setMarkers(marks.sort((a, b) => a - b).map(time => ({ time, position: "aboveBar",
     color: "#f5a623", shape: "arrowDown", text: "N" })));
   document.getElementById("hint").textContent = HOURLY.includes(tf)
-    ? (hist.length ? "" : "Истории продаж пока нет: нужен cookie Steam в облаке.")
+    ? (!hist.length ? "Истории продаж пока нет: нужен cookie Steam в облаке."
+       : hist.some(h => h.daily) ? "Коричневые столбики — продажи за целые сутки: старше ~30 дней Steam хранит историю только по дням." : "")
     : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.";
   if (fit) {
     // Свечи есть только с момента запуска сборщика, а история продаж — за годы: показываем последние ~200 баров.

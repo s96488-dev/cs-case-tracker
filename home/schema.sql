@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS sales_history (
     PRIMARY KEY (item_id, source, ts)
 );
 ALTER TABLE sales_history ALTER COLUMN median_cents DROP NOT NULL;
+-- Длина периода точки: 3600 (час) или 86400 (день). Старше ~30 дней Steam хранит только дневные точки.
+ALTER TABLE sales_history ADD COLUMN IF NOT EXISTS span_secs INTEGER NOT NULL DEFAULT 3600;
 
 -- Курсоры синхронизации: id последних записей облачного буфера (цены и продажи), сохранённых здесь.
 CREATE TABLE IF NOT EXISTS sync_state (
