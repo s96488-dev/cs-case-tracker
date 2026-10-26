@@ -36,3 +36,19 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value BIGINT NOT NULL
 );
+
+-- Официальные новости Valve по CS (Steam News API, лента steam_community_announcements).
+CREATE TABLE IF NOT EXISTS news (
+    gid      TEXT PRIMARY KEY,
+    ts       TIMESTAMPTZ NOT NULL,
+    title    TEXT NOT NULL,
+    url      TEXT NOT NULL,
+    contents TEXT NOT NULL
+);
+
+-- Какие кейсы упомянуты в новости (по точному названию кейса в заголовке или тексте).
+CREATE TABLE IF NOT EXISTS item_news (
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    gid     TEXT    NOT NULL REFERENCES news(gid),
+    PRIMARY KEY (item_id, gid)
+);

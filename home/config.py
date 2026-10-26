@@ -8,4 +8,6 @@ CLOUD_TOKEN = os.getenv("CLOUD_TOKEN", "")
 # Как часто забирать новые данные из облака, секунды.
 SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "60"))
 SYNC_BATCH = int(os.getenv("SYNC_BATCH", "5000"))
+# Как часто проверять новые новости Valve, секунды.
+NEWS_INTERVAL = int(os.getenv("NEWS_INTERVAL", "3600"))
 API_PORT = int(os.getenv("API_PORT", "8080"))
