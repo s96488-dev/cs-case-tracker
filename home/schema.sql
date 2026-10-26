@@ -54,3 +54,22 @@ CREATE TABLE IF NOT EXISTS item_news (
     gid     TEXT    NOT NULL REFERENCES news(gid),
     PRIMARY KEY (item_id, gid)
 );
+
+-- Дневные цены предметов, которые выпадают из кейсов (скины, ножи, перчатки): медиана и объём продаж за день.
+CREATE TABLE IF NOT EXISTS item_days (
+    market_hash_name TEXT    NOT NULL,
+    day              DATE    NOT NULL,
+    median_cents     INTEGER NOT NULL,
+    volume           INTEGER NOT NULL,
+    PRIMARY KEY (market_hash_name, day)
+);
+
+-- EV кейса по дням: сумма «цена предмета по последним 10 продажам × шанс выпадения».
+-- coverage — доля вероятности предметов, у которых на этот день есть цена (1.0 — посчитано всё).
+CREATE TABLE IF NOT EXISTS case_ev (
+    item_id  INTEGER NOT NULL REFERENCES items(id),
+    day      DATE    NOT NULL,
+    ev_cents INTEGER NOT NULL,
+    coverage REAL    NOT NULL,
+    PRIMARY KEY (item_id, day)
+);

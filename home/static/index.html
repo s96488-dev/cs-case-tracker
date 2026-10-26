@@ -24,6 +24,9 @@
   button { background:#232834; color:var(--text); border:1px solid var(--line); padding:4px 10px; border-radius:4px; cursor:pointer; }
   button.on { background:#2962ff; border-color:#2962ff; }
   #chart { flex:1; }
+  #ratioBox { height:150px; border-top:1px solid var(--line); position:relative; }
+  #ratio { position:absolute; inset:0; }
+  #ratioLabel { position:absolute; left:12px; top:6px; z-index:2; color:var(--muted); font-size:12px; pointer-events:none; }
   #status { color:var(--muted); font-size:12px; padding:6px 16px; border-top:1px solid var(--line); }
   #news { width:340px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
   #news h2 { font-size:14px; margin:0; padding:8px 8px 8px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; }
@@ -47,6 +50,7 @@
 <main>
   <header><h1 id="title">Выберите кейс</h1><span id="hint"></span><div id="tfs"></div></header>
   <div id="chart"></div>
+  <div id="ratioBox"><div id="ratioLabel">Цена / EV: выше 1 — кейс дороже того, что из него в среднем выпадает</div><div id="ratio"></div></div>
   <div id="status"></div>
 </main>
 <section id="news"><h2><span>Новости Valve по кейсу</span><button id="newsToggle" title="Свернуть / развернуть">»</button></h2><div id="newsList"></div></section>
@@ -69,6 +73,29 @@ const median = chart.addLineSeries({ color: "#f5a623", lineWidth: 2, priceLineVi
 const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "#3a4150",
   title: "продано", priceLineVisible: false });
 chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+// EV — ожидаемая стоимость открытия: сумма «цена предмета по последним 10 продажам × шанс выпадения».
+const evLine = chart.addLineSeries({ color: "#4fc3f7", lineWidth: 2, priceLineVisible: false,
+  title: "EV", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+
+// Нижняя панель: отношение цены кейса (медиана продаж) к EV, синхронизирована по времени с основным графиком.
+const ratioChart = LightweightCharts.createChart(document.getElementById("ratio"), {
+  autoSize: true,
+  layout: { background: { color: "#0f1115" }, textColor: "#c7c7c7" },
+  grid: { vertLines: { color: "#1c2029" }, horzLines: { color: "#1c2029" } },
+  timeScale: { timeVisible: true, secondsVisible: false, visible: false },
+  rightPriceScale: { minimumWidth: 70 },
+});
+chart.applyOptions({ rightPriceScale: { minimumWidth: 70 } });
+const ratioLine = ratioChart.addLineSeries({ color: "#ce93d8", lineWidth: 2, priceLineVisible: false,
+  priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
+let syncing = false;
+chart.timeScale().subscribeVisibleTimeRangeChange(r => {
+  if (!r || syncing) return;
+  syncing = true;
+  try { ratioChart.timeScale().setVisibleRange(r); } catch (e) {}
+  syncing = false;
+});
 
 const tfs = document.getElementById("tfs");
 for (const [label, val] of Object.entries(TFS)) {
@@ -109,6 +136,17 @@ async function loadChart(fit) {
   // Старше ~30 дней Steam хранит продажи только по дням: на 1ч и 4ч такой столбик — продажи за целые сутки,
   // поэтому он выше часовых. Красим их иначе, чтобы не путать.
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume, color: h.daily ? "#5c4a2a" : "#3a4150" })));
+  // EV есть по дням; на 1ч и 4ч линия идёт ступеньками по дням.
+  let evData = [];
+  if (HOURLY.includes(tf)) evData = await (await fetch(`/api/ev?item_id=${current.id}`)).json();
+  evLine.setData(evData.map(e => ({ time: e.time, value: e.ev })));
+  const evByDay = new Map(evData.map(e => [e.time, e.ev]));
+  ratioLine.setData(hist.filter(h => h.median !== null && evByDay.get(Math.floor(h.time / 86400) * 86400))
+    .map(h => ({ time: h.time, value: h.median / evByDay.get(Math.floor(h.time / 86400) * 86400) })));
+  const lastEv = evData[evData.length - 1];
+  document.getElementById("ratioLabel").textContent = lastEv
+    ? `Цена / EV. EV сейчас $${lastEv.ev.toFixed(2)}, посчитано ${(lastEv.coverage * 100).toFixed(0)}% вероятности. Выше 1 — кейс дороже того, что из него в среднем выпадает`
+    : "Цена / EV: EV ещё не посчитан (облако собирает цены предметов из кейсов, первый круг около суток)";
   // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
   const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
   const target = HOURLY.includes(tf) ? volume : candles;
@@ -126,6 +164,8 @@ async function loadChart(fit) {
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
     if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
   }
+  const range = chart.timeScale().getVisibleRange();
+  if (range) try { ratioChart.timeScale().setVisibleRange(range); } catch (e) {}
 }
 
 let newsItems = [];

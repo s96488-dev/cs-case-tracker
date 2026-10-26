@@ -56,9 +56,15 @@ def sales(after_id: int = 0, limit: int = Query(5000, le=20000)):
     return buf.read_sales(after_id, limit)
 
 
+@app.get("/api/item_days", dependencies=[Depends(auth)])
+def item_days(after_id: int = 0, limit: int = Query(5000, le=20000)):
+    return buf.read_item_days(after_id, limit)
+
+
 class Ack(BaseModel):
     up_to_id: int | None = None        # цены (ticks)
     sales_up_to_id: int | None = None  # история продаж
+    items_up_to_id: int | None = None  # дневные цены предметов из кейсов
 
 
 @app.post("/api/ack", dependencies=[Depends(auth)])
@@ -67,4 +73,6 @@ def ack(body: Ack):
         buf.ack(body.up_to_id)
     if body.sales_up_to_id is not None:
         buf.ack(body.sales_up_to_id, "sales_acked_id")
+    if body.items_up_to_id is not None:
+        buf.ack(body.items_up_to_id, "items_acked_id")
     return {"ok": True}

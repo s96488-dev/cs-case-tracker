@@ -10,4 +10,6 @@ SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "60"))
 SYNC_BATCH = int(os.getenv("SYNC_BATCH", "5000"))
 # Как часто проверять новые новости Valve, секунды.
 NEWS_INTERVAL = int(os.getenv("NEWS_INTERVAL", "3600"))
+# Как часто пересчитывать EV кейсов (если пришли новые цены предметов), секунды.
+EV_INTERVAL = int(os.getenv("EV_INTERVAL", "3600"))
 API_PORT = int(os.getenv("API_PORT", "8080"))

@@ -3,6 +3,7 @@
   /api/items     все кейсы с последней ценой и изменением за 24 ч
   /api/candles   OHLC-свечи для TradingView Lightweight Charts
   /api/news      новости Valve, связанные с кейсом
+  /api/ev        EV кейса по дням (ожидаемая стоимость открытия)
   /udf/*         UDF-датафид для полной библиотеки TradingView Charting Library
 
 Запуск: python -m home
@@ -16,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import news, sync
+from . import ev, news, sync
 from .db import ensure_database, open_pool, pool
 
 RESOLUTIONS = {"1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400, "D": 86400}
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     t = threading.Thread(target=sync.run_forever, args=(stop,), daemon=True, name="sync")
     t.start()
     threading.Thread(target=news.run_forever, args=(stop,), daemon=True, name="news").start()
+    threading.Thread(target=ev.run_forever, args=(stop,), daemon=True, name="ev").start()
     yield
     stop.set()
     pool.close()
@@ -120,6 +122,13 @@ def api_sales(item_id: int, tf: str = Query("60", description="60, 240 (мину
     if tf not in RESOLUTIONS:
         raise HTTPException(400, f"tf должен быть одним из {list(RESOLUTIONS)}")
     return sales(item_id, RESOLUTIONS[tf], start, end or int(time.time()) + 3600)
+
+
+@app.get("/api/ev")
+def api_ev(item_id: int):
+    """EV по дням в долларах и покрытие (доля вероятности предметов с известной ценой)."""
+    return q("""SELECT extract(epoch FROM day)::bigint AS time, ev_cents / 100.0 AS ev, coverage
+                FROM case_ev WHERE item_id = %s ORDER BY day""", (item_id,))
 
 
 @app.get("/api/news")

@@ -12,6 +12,9 @@ import time
 from common.steam import (SteamAuthError, SteamRateLimited, fetch_cases, fetch_price_history, jwt_expires_at,
                           make_client, refresh_login_secure, split_login_cookie)
 
+from common.case_contents import CRATES_URL, SKINS_URL, build as build_contents
+from common.ev import daily_points
+
 from . import config
 from .buffer import Buffer
 
@@ -72,9 +75,69 @@ class SteamLogin:
         return self.value
 
 
+class Contents:
+    """Состав кейсов (для EV): скачивается раз в сутки, при ошибке остаётся прежний."""
+
+    def __init__(self, client):
+        self.client, self.data, self.loaded_at = client, {}, 0.0
+
+    async def get(self) -> dict[str, dict[str, float]]:
+        if time.time() - self.loaded_at > 86400:
+            try:
+                crates = (await self.client.get(CRATES_URL)).json()
+                skins = (await self.client.get(SKINS_URL)).json()
+                self.data = await asyncio.to_thread(build_contents, crates, skins)
+                log.info("состав кейсов загружен: %d кейсов", len(self.data))
+            except Exception as e:
+                log.warning("состав кейсов не загрузился: %r", e)
+            self.loaded_at = time.time()
+        return self.data
+
+
+async def run_items(buf: Buffer, client, login: SteamLogin, contents: Contents, deadline: float):
+    """Цены предметов из кейсов для EV: сколько успеем до следующего прохода истории кейсов.
+    Полный круг по ~10 тыс. предметов занимает около суток, дальше каждый день по кругу заново."""
+    cases = set(await asyncio.to_thread(buf.case_names))
+    if config.EV_CASES:
+        cases &= set(config.EV_CASES)
+    data = await contents.get()
+    names = sorted({n for case, probs in data.items() if case in cases for n in probs})
+    if not names:
+        return
+    await asyncio.to_thread(buf.set_state, "items_total", str(len(names)))
+    todo = await asyncio.to_thread(buf.items_to_fetch, names, int((deadline - time.time()) / max(config.HISTORY_PAUSE, 1)) + 1)
+    fails = done = 0
+    for name in todo:
+        if time.time() > deadline:
+            break
+        try:
+            try:
+                points = await fetch_price_history(client, name, await login.get())
+            except SteamAuthError:
+                # Steam отвечает так же и на несуществующий предмет: продлеваем токен и пробуем один раз.
+                points = await fetch_price_history(client, name, await login.get(force_refresh=True))
+            fails = 0
+        except SteamRateLimited as e:
+            log.warning("%s, прерываю проход предметов", e)
+            await asyncio.sleep(300)
+            return
+        except Exception as e:
+            fails += 1
+            log.warning("цены %s: ошибка %r", name, e)
+            points = []
+            if fails >= 5:  # пять отказов подряд — скорее всего проблема со входом, а не с предметами
+                log.error("пять ошибок подряд, прерываю проход предметов")
+                return
+        await asyncio.to_thread(buf.save_item_days, name, daily_points(points))
+        done += 1
+        await asyncio.sleep(config.HISTORY_PAUSE)
+    log.info("цены предметов из кейсов: обновлено %d", done)
+
+
 async def run_history(buf: Buffer, client):
     await asyncio.sleep(20)  # даём циклу цен первым заполнить список кейсов
     login = SteamLogin(buf, client)
+    contents = Contents(client)
     while True:
         started = time.time()
         names = await asyncio.to_thread(buf.case_names)
@@ -110,6 +173,11 @@ async def run_history(buf: Buffer, client):
             await asyncio.to_thread(buf.set_state, "history_ok_at", str(int(time.time())))
         await asyncio.to_thread(buf.set_state, "history_error", error)
         await asyncio.to_thread(buf.set_state, "login_expires_at", str(login.expires_at()))
+        if config.ITEM_PRICES and not error:
+            try:
+                await run_items(buf, client, login, contents, started + config.HISTORY_INTERVAL - 60)
+            except Exception as e:
+                log.warning("проход цен предметов упал: %r", e)
         await asyncio.sleep(max(60, config.HISTORY_INTERVAL - (time.time() - started)))
 
 

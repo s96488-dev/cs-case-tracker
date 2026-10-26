@@ -19,3 +19,8 @@ STEAM_REFRESH_TOKEN = os.getenv("STEAM_REFRESH_TOKEN", "").strip()
 # Как часто обновлять историю продаж (секунды) и пауза между кейсами внутри одного прохода.
 HISTORY_INTERVAL = int(os.getenv("HISTORY_INTERVAL", "3600"))
 HISTORY_PAUSE = float(os.getenv("HISTORY_PAUSE", "6"))
+# Цены всех скинов, ножей и перчаток из кейсов (для EV) в промежутках между проходами истории кейсов.
+ITEM_PRICES = os.getenv("ITEM_PRICES", "1") == "1"
+# Для каких кейсов собирать цены содержимого (через запятую); пусто — для всех. Начинаем с одного
+# ликвидного кейса с длинной историей, чтобы проверить расчёт до полного круга по ~10 тыс. предметов.
+EV_CASES = [c.strip() for c in os.getenv("EV_CASES", "Clutch Case").split(",") if c.strip()]
