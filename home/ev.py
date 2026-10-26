@@ -1,4 +1,4 @@
-"""Расчёт EV кейсов по дням из дневных цен предметов (см. common/ev.py) раз в час, если пришли новые цены.
+"""Расчёт EV кейсов по дням из дневных цен предметов (см. common/ev.py): раз в минуту смотрим, пришли ли новые цены, и пересчитываем не чаще EV_INTERVAL.
 
 Состав кейсов и шансы — common/case_contents.py (открытый набор ByMykel/CSGO-API, скачивается раз в сутки).
 """
@@ -51,7 +51,7 @@ def compute_all(contents: dict[str, dict[str, float]]) -> int:
 
 
 def run_forever(stop):
-    contents, loaded_at, last_cursor = {}, 0.0, None
+    contents, loaded_at, last_cursor, computed_at = {}, 0.0, None, 0.0
     with httpx.Client(timeout=120) as client:
         while not stop.is_set():
             try:
@@ -61,10 +61,10 @@ def run_forever(stop):
                 with pool.connection() as conn:
                     row = conn.execute("SELECT value FROM sync_state WHERE key = 'cloud_items_cursor'").fetchone()
                 cursor = row["value"] if row else None
-                if cursor and cursor != last_cursor:
+                if cursor and cursor != last_cursor and time.time() - computed_at >= config.EV_INTERVAL:
                     n = compute_all(contents)
-                    last_cursor = cursor
+                    last_cursor, computed_at = cursor, time.time()
                     log.info("EV пересчитан для %d кейсов", n)
             except Exception as e:  # нет сети до GitHub и т.п.: попробуем позже
                 log.warning("EV не посчитан: %r", e)
-            stop.wait(config.EV_INTERVAL)
+            stop.wait(60)
