@@ -20,4 +20,5 @@ exp = json.loads(base64.urlsafe_b64decode(p))["exp"]
 print("Refresh token действует до", time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp)))
 PY
 docker compose up -d --force-recreate collector
-echo "Готово. Проверка через минуту: docker compose logs collector | grep -E 'токен|история' | tail -3"
+sleep 3
+docker compose exec -T collector python -m cloud.check_token

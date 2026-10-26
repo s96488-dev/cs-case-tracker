@@ -108,14 +108,18 @@ sh deploy/setup-vm.sh
 ## Токен Steam (для истории продаж)
 
 `steamLoginSecure` (короткий токен) Steam выдаёт ровно на сутки, а браузер тихо продлевает его через
-долгоживущий cookie `steamRefresh_steam`. Сборщик делает так же: ему нужен этот второй cookie, и он сам
-продлевает короткий токен через `IAuthenticationService/GenerateAccessTokenForApp` за 2 часа до истечения.
+долгоживущий cookie `steamRefresh_steam`. Сборщик делает так же: ему нужен этот второй cookie, и за 2 часа
+до истечения он сам проходит путь браузера `login.steampowered.com/jwt/refresh` → `steamcommunity.com/login/settoken`
+и получает свежий `steamLoginSecure`.
 
-1. В Chrome войди в Steam, открой <https://login.steampowered.com/> (страница может быть пустой, это нормально).
-2. F12 → **Application** → **Cookies** → `https://login.steampowered.com` → строка `steamRefresh_steam` →
-   двойной клик по **Value** → Ctrl+A → Ctrl+C.
+1. В Chrome войди в Steam. F12 → вкладка **Network** → галочка **Keep log** (Preserve log).
+2. В этой вкладке открой <https://login.steampowered.com/> (Steam перекинет на магазин, это нормально).
+   В фильтре впиши `login.steampowered`, выбери первый запрос → **Cookies** → **Request Cookies** →
+   `steamRefresh_steam` → скопируй Value.
 3. На облачной машине: `cd ~/cs-case-tracker && sh deploy/set-steam-token.sh`, вставь значение, Enter.
-   Скрипт покажет, до какого числа действует refresh token, и перезапустит сборщик.
+   Скрипт покажет, до какого числа действует refresh token, перезапустит сборщик и сразу проверит продление
+   (`ПРОДЛЕНИЕ РАБОТАЕТ` / `НЕ РАБОТАЕТ`). Проверить ещё раз в любой момент:
+   `docker compose exec -T collector python -m cloud.check_token`.
 4. Через минуту в логах появятся `токен Steam продлён до ...` и `история ...: N точек`.
    Состояние видно в `/api/stats`: `history_last_ok_at`, `history_last_error`, `login_expires_at`.
 

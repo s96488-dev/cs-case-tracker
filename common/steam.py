@@ -139,9 +139,11 @@ async def fetch_price_history(client: AsyncSession, name: str, login_secure: str
 #
 # steamLoginSecure = "<steamid>%7C%7C<access token>", а access token Steam выдаёт ровно на сутки.
 # Браузер продлевает его через долгоживущий refresh token (cookie steamRefresh_steam на
-# login.steampowered.com). Делаем то же самое через официальный метод Steam Web API.
+# login.steampowered.com): login.steampowered.com/jwt/refresh перенаправляет на
+# steamcommunity.com/login/settoken, и тот ставит свежий steamLoginSecure. Делаем то же самое.
+# (IAuthenticationService/GenerateAccessTokenForApp токен из браузера не принимает.)
 
-REFRESH_URL = "https://api.steampowered.com/IAuthenticationService/GenerateAccessTokenForApp/v1/"
+JWT_REFRESH_URL = "https://login.steampowered.com/jwt/refresh"
 
 
 def split_login_cookie(value: str) -> tuple[str, str]:
@@ -161,14 +163,21 @@ def jwt_expires_at(token: str) -> int:
     return int(json.loads(base64.urlsafe_b64decode(payload))["exp"])
 
 
-async def refresh_login_secure(client: AsyncSession, refresh_cookie: str) -> str:
-    """Получает свежий steamLoginSecure по refresh token."""
-    steamid, refresh_token = split_login_cookie(refresh_cookie)
-    r = await client.post(REFRESH_URL, data={"steamid": steamid, "refresh_token": refresh_token})
-    if r.status_code in (400, 401, 403):
-        raise SteamAuthError(f"продление токена: HTTP {r.status_code}, refresh token устарел или отозван")
-    r.raise_for_status()
-    access = (r.json() or {}).get("response", {}).get("access_token")
-    if not access:
-        raise SteamAuthError("продление токена: Steam не вернул access_token, refresh token устарел или отозван")
-    return f"{steamid}%7C%7C{access}"
+async def refresh_login_secure(refresh_cookie: str, proxy: str | None = None) -> str:
+    """Получает свежий steamLoginSecure по refresh token, повторяя путь браузера.
+    Отдельная сессия, чтобы полученные cookie не смешивались с основным клиентом."""
+    from urllib.parse import urlparse
+    split_login_cookie(refresh_cookie)  # проверка формата
+    async with make_client(proxy) as s:
+        s.cookies.set("steamRefresh_steam", refresh_cookie.strip(), domain=urlparse(JWT_REFRESH_URL).hostname)
+        r = await s.get(JWT_REFRESH_URL, params={"redir": "https://steamcommunity.com/"}, allow_redirects=False)
+        location = r.headers.get("location", "")
+        if r.status_code not in (301, 302, 303) or "/login/settoken" not in location:
+            raise SteamAuthError(f"продление токена: Steam ответил {r.status_code} без перехода на settoken, "
+                                 "refresh token устарел или отозван")
+        await s.get(location, allow_redirects=False)
+        value = next((c.value for c in s.cookies.jar if c.name == "steamLoginSecure"), None)
+    if not value:
+        raise SteamAuthError("продление токена: Steam не выдал steamLoginSecure, refresh token устарел или отозван")
+    split_login_cookie(value)
+    return value
