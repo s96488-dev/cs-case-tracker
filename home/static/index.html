@@ -95,6 +95,10 @@ chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 // EV — ожидаемая стоимость открытия: сумма «цена предмета по последним 10 продажам × шанс выпадения».
 const evLine = chart.addLineSeries({ color: "#4fc3f7", lineWidth: 2, priceLineVisible: false,
   title: "EV", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+// Вертикальная линия активного дропа: столбик на всю высоту на своей невидимой шкале.
+const dropLine = chart.addHistogramSeries({ priceScaleId: "drop", priceLineVisible: false, lastValueVisible: false,
+  priceFormat: { type: "volume" } });
+chart.priceScale("drop").applyOptions({ scaleMargins: { top: 0.06, bottom: 0 }, visible: false });
 // Несглаженный EV тонкой бледной линией под сглаженным.
 const evRaw = chart.addLineSeries({ color: "rgba(79,195,247,0.35)", lineWidth: 1, priceLineVisible: false,
   lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
@@ -221,6 +225,25 @@ async function loadChart(fit) {
   // поэтому он выше часовых. Красим их иначе, чтобы не путать.
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume, color: h.daily ? "#5c4a2a" : "#3a4150" })));
   // EV есть по дням; на 1ч и 4ч линия идёт ступеньками по дням.
+  // Активный дроп: для ушедших кейсов — дата ухода, для ещё активных — прогноз по среднему сроку прошлых.
+  const drop = await (await fetch(`/api/drop?item_id=${current.id}`)).json();
+  const stepD = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
+  const dropDate = drop && (drop.left_active || drop.forecast);
+  // Шкала времени в Lightweight Charts идёт по барам, а не по календарю: если дата вне данных (прогноз в будущем
+  // или уход до начала истории), заполняем промежуток пустыми барами, чтобы линия встала на своё место.
+  const allTimes = [...bars.map(b => b.time), ...hist.map(h => h.time)];
+  const t = dropDate ? Math.floor(Date.parse(dropDate + "T00:00:00Z") / 1000 / stepD) * stepD : null;
+  const first = Math.min(...allTimes), last = Math.max(...allTimes);
+  const gap = t === null || !allTimes.length ? Infinity : Math.max(0, first - t, t - last) / stepD;
+  if (gap < 20000) {
+    const forecast = !drop.left_active, pts = [];
+    for (let x = t; x < first; x += stepD) if (x !== t) pts.push({ time: x });
+    for (let x = last + stepD; x < t; x += stepD) pts.push({ time: x });
+    pts.push({ time: t, value: 1, color: forecast ? "rgba(239,83,80,0.6)" : "rgba(138,143,152,0.5)" });
+    dropLine.setData(pts.sort((a, b) => a.time - b.time));
+    dropLine.setMarkers([{ time: t, position: "aboveBar", color: forecast ? "#ef5350" : "#8a8f98", shape: "circle",
+      text: forecast ? `прогноз ухода из дропа ${dropDate}` : `ушёл из дропа ${dropDate}` }]);
+  } else { dropLine.setData([]); dropLine.setMarkers([]); }
   evData = [];
   if (HOURLY.includes(tf)) evData = await (await fetch(`/api/ev?item_id=${current.id}`)).json();
   renderEv();
@@ -232,10 +255,12 @@ async function loadChart(fit) {
   const marks = [...new Set(newsItems.map(n => Math.floor(n.ts / step) * step))].filter(t => times.has(t));
   target.setMarkers(marks.sort((a, b) => a - b).map(time => ({ time, position: "aboveBar",
     color: "#f5a623", shape: "arrowDown", text: "N" })));
-  document.getElementById("hint").textContent = HOURLY.includes(tf)
+  const dropHint = drop && drop.forecast ? `Красная линия — прогноз ухода из активного дропа: выход ${drop.released} + `
+    + `${drop.mean_days} дн. (средний срок прошлых обычных кейсов). ` : "";
+  document.getElementById("hint").textContent = dropHint + (HOURLY.includes(tf)
     ? (!hist.length ? "Истории продаж пока нет: нужен cookie Steam в облаке."
        : hist.some(h => h.daily) ? "Коричневые столбики — продажи за целые сутки: старше ~30 дней Steam хранит историю только по дням." : "")
-    : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.";
+    : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.");
   if (fit) {
     // Свечи есть только с момента запуска сборщика, а история продаж — за годы: показываем последние ~200 баров.
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
