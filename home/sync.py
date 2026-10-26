@@ -133,12 +133,48 @@ def sync_sales_once(client: httpx.Client) -> int:
             return total
 
 
+def sync_items_once(client: httpx.Client) -> int:
+    """Дневные цены предметов из кейсов (для EV). Первый раз — история ~10 тыс. предметов за годы."""
+    total = 0
+    while True:
+        with pool.connection() as conn:
+            cursor = _cursor(conn, "cloud_items_cursor")
+        r = client.get(f"{config.CLOUD_URL}/api/item_days", params={"after_id": cursor, "limit": config.SYNC_BATCH})
+        if r.status_code == 404:  # облако ещё старой версии
+            return 0
+        r.raise_for_status()
+        batch = r.json()
+        if batch["max_id"] < cursor:
+            log.warning("буфер цен предметов в облаке пересоздан, сбрасываю курсор")
+            with pool.connection() as conn:
+                _set_cursor(conn, "cloud_items_cursor", 0)
+            continue
+        if not batch["items"]:
+            return total
+        new_cursor = batch["items"][-1]["id"]
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.executemany(
+                """INSERT INTO item_days (market_hash_name, day, median_cents, volume)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (market_hash_name, day) DO UPDATE
+                   SET median_cents = EXCLUDED.median_cents, volume = EXCLUDED.volume""",
+                [(r["market_hash_name"], datetime.fromtimestamp(r["day"], timezone.utc).date(),
+                  r["median_cents"], r["volume"]) for r in batch["items"]])
+            _set_cursor(conn, "cloud_items_cursor", new_cursor)
+        client.post(f"{config.CLOUD_URL}/api/ack", json={"items_up_to_id": new_cursor}).raise_for_status()
+        total += len(batch["items"])
+        log.info("получено %d дневных цен предметов, курсор %d", len(batch["items"]), new_cursor)
+        if not batch["has_more"]:
+            return total
+
+
 def run_forever(stop=None):
     with httpx.Client(timeout=60, headers={"Authorization": f"Bearer {config.CLOUD_TOKEN}"}) as client:
         while not (stop and stop.is_set()):
             try:
                 sync_once(client)
                 sync_sales_once(client)
+                sync_items_once(client)
             except Exception as e:  # облако недоступно, нет интернета и т.п. — попробуем позже
                 log.warning("синхронизация не удалась: %r", e)
             if stop:

@@ -46,6 +46,22 @@ CREATE TABLE IF NOT EXISTS sales_seen (
     market_hash_name TEXT PRIMARY KEY,
     last_ts          INTEGER NOT NULL
 );
+-- Цены предметов из кейсов (скины, ножи, перчатки) по дням: медиана и объём продаж за день.
+-- Нужны дому для расчёта EV кейсов. Как и sales, чистится после подтверждения.
+CREATE TABLE IF NOT EXISTS item_days (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_hash_name TEXT    NOT NULL,
+    day              INTEGER NOT NULL,
+    median_cents     INTEGER NOT NULL,
+    volume           INTEGER NOT NULL,
+    UNIQUE (market_hash_name, day)
+);
+-- Когда предмет последний раз запрашивали и до какого дня история уже отдана дому.
+CREATE TABLE IF NOT EXISTS item_seen (
+    market_hash_name TEXT PRIMARY KEY,
+    last_day         INTEGER NOT NULL,
+    fetched_at       INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS fetch_log (
     id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, ok INTEGER NOT NULL,
@@ -106,6 +122,36 @@ class Buffer:
                 self.conn.execute("INSERT OR REPLACE INTO sales_seen VALUES (?, ?)", (name, max(p.ts for p in points)))
             return len(fresh)
 
+    def save_item_days(self, name: str, days: list[tuple[int, int, int]], revise_days: int = 2) -> int:
+        """Дневные точки предмета [(день, медиана, объём)]. Последние revise_days дней ещё дописываются,
+        их перезаписываем с новым id; более старые уже отданы дому и повторно не отправляются."""
+        now = int(time.time())
+        with self.lock, self.conn:
+            row = self.conn.execute("SELECT last_day FROM item_seen WHERE market_hash_name = ?", (name,)).fetchone()
+            since = row[0] - revise_days * 86400 if row else -1
+            fresh = [d for d in days if d[0] >= since]
+            self.conn.executemany("DELETE FROM item_days WHERE market_hash_name = ? AND day = ?",
+                                  [(name, d[0]) for d in fresh])
+            self.conn.executemany(
+                "INSERT INTO item_days (market_hash_name, day, median_cents, volume) VALUES (?, ?, ?, ?)",
+                [(name, *d) for d in fresh])
+            last = max([d[0] for d in days] + [row[0] if row else 0])
+            self.conn.execute("INSERT OR REPLACE INTO item_seen VALUES (?, ?, ?)", (name, last, now))
+            return len(fresh)
+
+    def items_to_fetch(self, names: list[str], limit: int) -> list[str]:
+        """Сначала ни разу не запрошенные предметы, потом те, что запрашивались давнее всего."""
+        with self.lock:
+            seen = dict(self.conn.execute("SELECT market_hash_name, fetched_at FROM item_seen").fetchall())
+        return sorted(names, key=lambda n: seen.get(n, 0))[:limit]
+
+    def read_item_days(self, after_id: int, limit: int) -> dict:
+        with self.lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM item_days WHERE id > ? ORDER BY id LIMIT ?", (after_id, limit))]
+            max_id = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM item_days").fetchone()[0]
+        return {"items": rows, "max_id": max_id, "has_more": bool(rows) and rows[-1]["id"] < max_id}
+
     def log_fetch(self, ts: int, ok: bool, items: int = 0, error: str | None = None):
         with self.lock, self.conn:
             self.conn.execute("INSERT INTO fetch_log (ts, ok, items, error) VALUES (?,?,?,?)",
@@ -148,6 +194,8 @@ class Buffer:
             # Историю продаж (она бывает за годы) удаляем по времени поступления, а не по ts точки.
             sacked = int(self._state("sales_acked_id") or 0)
             n += self.conn.execute("DELETE FROM sales WHERE id <= ?", (sacked,)).rowcount
+            iacked = int(self._state("items_acked_id") or 0)
+            n += self.conn.execute("DELETE FROM item_days WHERE id <= ?", (iacked,)).rowcount
         return n
 
     def _state(self, key: str) -> str | None:
@@ -174,6 +222,10 @@ class Buffer:
                 "history_last_ok_at": int(self._state("history_ok_at") or 0) or None,
                 "history_last_error": self._state("history_error"),
                 "login_expires_at": int(self._state("login_expires_at") or 0) or None,
+                "pending_item_days": self.conn.execute("SELECT COUNT(*) FROM item_days WHERE id > ?",
+                                                       (int(self._state("items_acked_id") or 0),)).fetchone()[0],
+                "items_fetched": self.conn.execute("SELECT COUNT(*) FROM item_seen").fetchone()[0],
+                "items_total": int(self._state("items_total") or 0),
             }
 
     def get_state(self, key: str) -> str | None:
