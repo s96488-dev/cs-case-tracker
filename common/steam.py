@@ -133,3 +133,42 @@ async def fetch_price_history(client: AsyncSession, name: str, login_secure: str
     if not isinstance(data, dict) or not data.get("success"):
         raise SteamAuthError("pricehistory: success=false, cookie steamLoginSecure устарел или неверный")
     return parse_history(name, data)
+
+
+# ---------- Продление логина ----------
+#
+# steamLoginSecure = "<steamid>%7C%7C<access token>", а access token Steam выдаёт ровно на сутки.
+# Браузер продлевает его через долгоживущий refresh token (cookie steamRefresh_steam на
+# login.steampowered.com). Делаем то же самое через официальный метод Steam Web API.
+
+REFRESH_URL = "https://api.steampowered.com/IAuthenticationService/GenerateAccessTokenForApp/v1/"
+
+
+def split_login_cookie(value: str) -> tuple[str, str]:
+    """'7656...%7C%7CeyJ...' -> ('7656...', 'eyJ...')."""
+    from urllib.parse import unquote
+    steamid, sep, token = unquote(value.strip()).partition("||")
+    if not sep or not steamid.isdigit() or token.count(".") != 2:
+        raise SteamAuthError("значение cookie не похоже на токен Steam (нет '%7C%7C' или JWT)")
+    return steamid, token
+
+
+def jwt_expires_at(token: str) -> int:
+    import base64
+    import json
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    return int(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+
+
+async def refresh_login_secure(client: AsyncSession, refresh_cookie: str) -> str:
+    """Получает свежий steamLoginSecure по refresh token."""
+    steamid, refresh_token = split_login_cookie(refresh_cookie)
+    r = await client.post(REFRESH_URL, data={"steamid": steamid, "refresh_token": refresh_token})
+    if r.status_code in (400, 401, 403):
+        raise SteamAuthError(f"продление токена: HTTP {r.status_code}, refresh token устарел или отозван")
+    r.raise_for_status()
+    access = (r.json() or {}).get("response", {}).get("access_token")
+    if not access:
+        raise SteamAuthError("продление токена: Steam не вернул access_token, refresh token устарел или отозван")
+    return f"{steamid}%7C%7C{access}"

@@ -101,28 +101,32 @@ sh deploy/setup-vm.sh
    nano .env    # впиши API_TOKEN и DOMAIN = внешний IP через дефисы + .sslip.io
    ```
 6. Запусти: `sudo docker compose up -d --build`. Сервисы перезапускаются сами после перезагрузки VM.
-7. (Для истории продаж) добавь cookie Steam, см. раздел «Cookie Steam» ниже.
+7. (Для истории продаж) добавь токен Steam, см. раздел «Токен Steam» ниже.
 8. Проверь: `curl https://<DOMAIN>/health` → `last_success_at` должен обновляться каждую минуту.
    Логи: `sudo docker compose logs -f collector`.
 
-## Cookie Steam (для истории продаж)
+## Токен Steam (для истории продаж)
 
-1. В Chrome войди на <https://steamcommunity.com>.
-2. F12 → вкладка **Application** → **Cookies** → `https://steamcommunity.com` → строка `steamLoginSecure` → скопируй **Value**.
-3. На облачной машине:
-   ```bash
-   cd ~/cs-case-tracker
-   echo 'STEAM_LOGIN_SECURE=вставь_значение' >> .env
-   sudo docker compose up -d
-   ```
-4. Через минуту в логах появятся строки `история ...: N точек`. Состояние видно в `/api/stats` (`history_last_ok_at`, `history_last_error`).
+`steamLoginSecure` (короткий токен) Steam выдаёт ровно на сутки, а браузер тихо продлевает его через
+долгоживущий cookie `steamRefresh_steam`. Сборщик делает так же: ему нужен этот второй cookie, и он сам
+продлевает короткий токен через `IAuthenticationService/GenerateAccessTokenForApp` за 2 часа до истечения.
+
+1. В Chrome войди в Steam, открой <https://login.steampowered.com/> (страница может быть пустой, это нормально).
+2. F12 → **Application** → **Cookies** → `https://login.steampowered.com` → строка `steamRefresh_steam` →
+   двойной клик по **Value** → Ctrl+A → Ctrl+C.
+3. На облачной машине: `cd ~/cs-case-tracker && sh deploy/set-steam-token.sh`, вставь значение, Enter.
+   Скрипт покажет, до какого числа действует refresh token, и перезапустит сборщик.
+4. Через минуту в логах появятся `токен Steam продлён до ...` и `история ...: N точек`.
+   Состояние видно в `/api/stats`: `history_last_ok_at`, `history_last_error`, `login_expires_at`.
 
 Важно:
-- Cookie даёт доступ к аккаунту (кроме действий, защищённых Steam Guard). Держи `.env` в секрете; если есть
-  второй аккаунт без ценного инвентаря, лучше взять cookie с него.
-- Нажатие «Выйти» в Steam в этом браузере делает cookie недействительным. Сам он истекает примерно через
-  несколько недель: тогда в логах будет `cookie steamLoginSecure устарел`, надо повторить шаги 1–3
-  (старую строку `STEAM_LOGIN_SECURE=` в `.env` удали или замени).
+- Refresh token даёт доступ к аккаунту (кроме действий под Steam Guard) на долгий срок. Держи `.env`
+  в секрете; если есть второй аккаунт без ценного инвентаря, лучше брать токен с него.
+- «Выйти» в Steam в этом браузере отзывает токен. Тогда в логах будет `refresh token устарел или отозван`:
+  повтори шаги 1–3.
+- Если токен перестал работать, данные не пропадут: Steam хранит почасовую историю примерно за 30 дней,
+  и после нового токена сборщик её догрузит.
+- Без refresh token можно вписать в `.env` просто `STEAM_LOGIN_SECURE=...`, но он проработает только сутки.
 
 ## 2. Дом: PostgreSQL + синхронизатор (Windows)
 

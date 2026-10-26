@@ -162,7 +162,12 @@ class Buffer:
                                                    (int(self._state("sales_acked_id") or 0),)).fetchone()[0],
                 "history_last_ok_at": int(self._state("history_ok_at") or 0) or None,
                 "history_last_error": self._state("history_error"),
+                "login_expires_at": int(self._state("login_expires_at") or 0) or None,
             }
+
+    def get_state(self, key: str) -> str | None:
+        with self.lock:
+            return self._state(key)
 
     def set_state(self, key: str, value: str | None):
         with self.lock, self.conn:
