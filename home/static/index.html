@@ -25,6 +25,15 @@
   button.on { background:#2962ff; border-color:#2962ff; }
   #chart { flex:1; }
   #status { color:var(--muted); font-size:12px; padding:6px 16px; border-top:1px solid var(--line); }
+  #news { width:340px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #news h2 { font-size:14px; margin:0; padding:12px; border-bottom:1px solid var(--line); }
+  #news .item { padding:10px 12px; border-bottom:1px solid var(--line); }
+  #news .date { color:var(--muted); font-size:12px; }
+  #news a { color:#8ab4ff; text-decoration:none; }
+  #news a:hover { text-decoration:underline; }
+  #news .text { color:#b8bcc4; font-size:12px; margin-top:4px; white-space:pre-line; max-height:4.5em; overflow:hidden; cursor:pointer; }
+  #news .text.open { max-height:none; }
+  #news .empty { color:var(--muted); padding:12px; }
 </style>
 </head>
 <body>
@@ -34,6 +43,7 @@
   <div id="chart"></div>
   <div id="status"></div>
 </main>
+<section id="news"><h2>Новости Valve по кейсу</h2><div id="newsList"></div></section>
 <script src="lightweight-charts.standalone.production.js"></script>
 <script>
 const TFS = { "1м": "1", "5м": "5", "15м": "15", "1ч": "60", "4ч": "240", "1Д": "1D" };
@@ -75,10 +85,10 @@ async function loadItems() {
     row.innerHTML = `<img src="${it.icon_url || ""}" alt=""><span class="name"></span>
       <span class="price">$${it.price.toFixed(2)}<br><span class="chg ${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span></span>`;
     row.querySelector(".name").textContent = it.market_hash_name;
-    row.onclick = () => { current = it; loadItems(); loadChart(true); };
+    row.onclick = () => { current = it; loadItems(); loadNews().then(() => loadChart(true)); };
     list.appendChild(row);
   }
-  if (!current && items.length) { current = items[0]; loadItems(); loadChart(true); }
+  if (!current && items.length) { current = items[0]; loadItems(); loadNews().then(() => loadChart(true)); }
 }
 
 async function loadChart(fit) {
@@ -91,14 +101,43 @@ async function loadChart(fit) {
   if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
   median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume })));
+  // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
+  const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
+  const target = HOURLY.includes(tf) ? volume : candles;
+  (HOURLY.includes(tf) ? candles : volume).setMarkers([]);
+  const times = new Set((HOURLY.includes(tf) ? hist : bars).map(b => b.time));
+  const marks = [...new Set(newsItems.map(n => Math.floor(n.ts / step) * step))].filter(t => times.has(t));
+  target.setMarkers(marks.sort((a, b) => a - b).map(time => ({ time, position: "aboveBar",
+    color: "#f5a623", shape: "arrowDown", text: "N" })));
   document.getElementById("hint").textContent = HOURLY.includes(tf)
     ? (hist.length ? "" : "Истории продаж пока нет: нужен cookie Steam в облаке.")
     : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.";
   if (fit) {
     // Свечи есть только с момента запуска сборщика, а история продаж — за годы: показываем последние ~200 баров.
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
-    const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
     if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
+  }
+}
+
+let newsItems = [];
+// Текст новостей Steam приходит в BBCode/HTML: для панели оставляем только текст.
+const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[\/?(p|br|list|olist|\*|h\d)\]/g, "\n")
+  .replace(/\[[^\]]*\]/g, "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim();
+
+async function loadNews() {
+  if (!current) return;
+  newsItems = await (await fetch(`/api/news?item_id=${current.id}`)).json();
+  const box = document.getElementById("newsList");
+  box.innerHTML = newsItems.length ? "" : '<div class="empty">Новостей с этим кейсом пока нет.</div>';
+  for (const n of newsItems) {
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = '<div class="date"></div><a target="_blank" rel="noopener"></a><div class="text"></div>';
+    el.querySelector(".date").textContent = new Date(n.ts * 1000).toLocaleDateString();
+    const a = el.querySelector("a"); a.textContent = n.title; if (/^https?:/.test(n.url)) a.href = n.url;
+    const txt = el.querySelector(".text"); txt.textContent = plain(n.contents);
+    txt.onclick = () => txt.classList.toggle("open");
+    box.appendChild(el);
   }
 }
 

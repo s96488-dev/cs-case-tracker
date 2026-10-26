@@ -2,6 +2,7 @@
 
   /api/items     все кейсы с последней ценой и изменением за 24 ч
   /api/candles   OHLC-свечи для TradingView Lightweight Charts
+  /api/news      новости Valve, связанные с кейсом
   /udf/*         UDF-датафид для полной библиотеки TradingView Charting Library
 
 Запуск: python -m home
@@ -15,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import sync
+from . import news, sync
 from .db import ensure_database, open_pool, pool
 
 RESOLUTIONS = {"1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400, "D": 86400}
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
     stop = threading.Event()
     t = threading.Thread(target=sync.run_forever, args=(stop,), daemon=True, name="sync")
     t.start()
+    threading.Thread(target=news.run_forever, args=(stop,), daemon=True, name="news").start()
     yield
     stop.set()
     pool.close()
@@ -118,6 +120,16 @@ def api_sales(item_id: int, tf: str = Query("60", description="60, 240 (мину
     if tf not in RESOLUTIONS:
         raise HTTPException(400, f"tf должен быть одним из {list(RESOLUTIONS)}")
     return sales(item_id, RESOLUTIONS[tf], start, end or int(time.time()) + 3600)
+
+
+@app.get("/api/news")
+def api_news(item_id: int | None = None, limit: int = 200):
+    """Новости Valve: для кейса — где он упомянут, без item_id — все подряд. Новые сверху."""
+    where, args = "", {"limit": limit}
+    if item_id is not None:
+        where, args["id"] = "WHERE n.gid IN (SELECT gid FROM item_news WHERE item_id = %(id)s)", item_id
+    return q(f"""SELECT n.gid, extract(epoch FROM n.ts)::bigint AS ts, n.title, n.url, n.contents
+                 FROM news n {where} ORDER BY n.ts DESC LIMIT %(limit)s""", args)
 
 
 @app.get("/api/status")
