@@ -81,6 +81,11 @@ class Buffer:
         """Кладёт в буфер новые точки истории продаж. Последние revise_hours часов Steam ещё
         дописывает (текущий час растёт), поэтому их перезаписываем с новым id — дом заберёт заново."""
         with self.lock, self.conn:
+            # Первая история с ценами в USD (вход с долларового аккаунта): раньше медианы не было,
+            # поэтому всю историю всех кейсов отдаём дому заново, он допишет цены к уже сохранённым точкам.
+            if any(p.median_cents is not None for p in points) and self._state("sales_usd") is None:
+                self.conn.execute("DELETE FROM sales_seen")
+                self.conn.execute("INSERT OR REPLACE INTO state VALUES ('sales_usd', '1')")
             row = self.conn.execute("SELECT last_ts FROM sales_seen WHERE market_hash_name = ?", (name,)).fetchone()
             since = row[0] - revise_hours * 3600 if row else -1
             fresh = [p for p in points if p.ts >= since]
