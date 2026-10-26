@@ -113,11 +113,18 @@ def parse_history(name: str, data: dict) -> list[SalePoint]:
     # currency он игнорирует), медиану отбрасываем: пересчёт прошлых цен по сегодняшнему курсу исказил бы
     # данные. Число продаж от валюты не зависит, его сохраняем всегда.
     usd = currency == "USD"
+    rows = [(parse_history_date(r[0]), r[1], r[2]) for r in data.get("prices") or []]
+    # Последние ~30 дней Steam отдаёт по часам, а всё, что старше, по дням: одна точка в сутки с часом 01.
+    # Часовая часть начинается с первого дня, где точек больше одной.
+    per_day: dict[int, int] = {}
+    for ts, _, _ in rows:
+        per_day[ts // 86400] = per_day.get(ts // 86400, 0) + 1
+    hourly_from = min((d for d, n in per_day.items() if n > 1), default=None)
     out = []
-    for row in data.get("prices") or []:
-        date, median, volume = row[0], row[1], row[2]
-        out.append(SalePoint(name, parse_history_date(date), round(float(median) * 100) if usd else None,
-                             int(str(volume).replace(",", "")), "USD"))
+    for ts, median, volume in rows:
+        daily = (hourly_from is None or ts // 86400 < hourly_from) and ts % 86400 == 3600
+        out.append(SalePoint(name, ts, round(float(median) * 100) if usd else None,
+                             int(str(volume).replace(",", "")), "USD", span=86400 if daily else 3600))
     return out
 
 

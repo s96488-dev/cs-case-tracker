@@ -42,3 +42,4 @@ class SalePoint:
     volume: int                    # сколько штук продано за период
     currency: str = "USD"
     source: str = "steam"
+    span: int = 3600               # длина периода, секунды: 3600 (час) или 86400 (день)

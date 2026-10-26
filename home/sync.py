@@ -84,13 +84,24 @@ def _store_sales(conn, rows: list[dict], new_cursor: int):
                    ON CONFLICT (market_hash_name) DO UPDATE SET item_type = items.item_type
                    RETURNING id""", (n,)).fetchone()["id"]
     with conn.cursor() as cur:
+        # Дневная точка заменяет часовые точки того же дня, если они сохранились раньше (Steam уже свернул
+        # тот день в одну точку). Иначе продажи этого дня посчитались бы дважды.
+        daily = [r for r in rows if r.get("span", 3600) == 86400]
         cur.executemany(
-            """INSERT INTO sales_history (item_id, source, ts, median_cents, volume, currency)
-               VALUES (%s, %s, %s, %s, %s, %s)
+            """DELETE FROM sales_history WHERE item_id = %s AND source = %s
+               AND ts >= %s AND ts < %s + interval '1 day' AND ts <> %s""",
+            [(ids[r["market_hash_name"]], r["source"], day, day, ts)
+             for r in daily
+             for ts in [datetime.fromtimestamp(r["ts"], timezone.utc)]
+             for day in [datetime.fromtimestamp(r["ts"] // 86400 * 86400, timezone.utc)]])
+        cur.executemany(
+            """INSERT INTO sales_history (item_id, source, ts, median_cents, volume, currency, span_secs)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (item_id, source, ts) DO UPDATE
-               SET median_cents = EXCLUDED.median_cents, volume = EXCLUDED.volume, currency = EXCLUDED.currency""",
+               SET median_cents = EXCLUDED.median_cents, volume = EXCLUDED.volume, currency = EXCLUDED.currency,
+                   span_secs = EXCLUDED.span_secs""",
             [(ids[r["market_hash_name"]], r["source"], datetime.fromtimestamp(r["ts"], timezone.utc),
-              r["median_cents"], r["volume"], r["currency"]) for r in rows])
+              r["median_cents"], r["volume"], r["currency"], r.get("span", 3600)) for r in rows])
     _set_cursor(conn, "cloud_sales_cursor", new_cursor)
 
 

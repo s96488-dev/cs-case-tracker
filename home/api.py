@@ -75,7 +75,7 @@ def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") ->
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
                   sum(median_cents::bigint * volume) / NULLIF(sum(volume) FILTER (WHERE median_cents IS NOT NULL), 0) AS median,
                   avg(median_cents) AS median_plain,
-                  sum(volume) AS volume, max(currency) AS currency
+                  sum(volume) AS volume, max(currency) AS currency, max(span_secs) AS span
            FROM sales_history
            WHERE item_id = %(id)s AND source = %(src)s
              AND ts >= to_timestamp(%(start)s) AND ts < to_timestamp(%(end)s)
@@ -85,7 +85,7 @@ def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") ->
     for r in rows:
         m = r["median"] if r["median"] is not None else r["median_plain"]
         out.append({"time": r["time"], "median": round(float(m)) / 100 if m is not None else None,
-                    "volume": int(r["volume"]), "currency": "USD"})
+                    "volume": int(r["volume"]), "currency": "USD", "daily": r["span"] > tf})
     return out
 
 

@@ -11,6 +11,9 @@ from pathlib import Path
 
 from common.models import Item, PriceTick, SalePoint
 
+# Версия формата истории продаж: при её смене облако один раз заново отдаёт дому всю историю.
+SALES_RESEND = "2"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     market_hash_name TEXT PRIMARY KEY,
@@ -58,6 +61,8 @@ class Buffer:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        if "span" not in {r[1] for r in self.conn.execute("PRAGMA table_info(sales)")}:
+            self.conn.execute("ALTER TABLE sales ADD COLUMN span INTEGER NOT NULL DEFAULT 3600")
         self.lock = threading.Lock()
 
     def save(self, ticks: list[PriceTick], items: list[Item]) -> int:
@@ -81,11 +86,12 @@ class Buffer:
         """Кладёт в буфер новые точки истории продаж. Последние revise_hours часов Steam ещё
         дописывает (текущий час растёт), поэтому их перезаписываем с новым id — дом заберёт заново."""
         with self.lock, self.conn:
-            # Первая история с ценами в USD (вход с долларового аккаунта): раньше медианы не было,
-            # поэтому всю историю всех кейсов отдаём дому заново, он допишет цены к уже сохранённым точкам.
-            if any(p.median_cents is not None for p in points) and self._state("sales_usd") is None:
+            # Всю историю всех кейсов отдаём дому заново один раз на каждую версию формата:
+            # 1 — появились цены в USD (вход с долларового аккаунта), 2 — точки помечены часовыми или дневными.
+            # Дом допишет новое к уже сохранённым точкам.
+            if any(p.median_cents is not None for p in points) and self._state("sales_resend") != SALES_RESEND:
                 self.conn.execute("DELETE FROM sales_seen")
-                self.conn.execute("INSERT OR REPLACE INTO state VALUES ('sales_usd', '1')")
+                self.conn.execute("INSERT OR REPLACE INTO state VALUES ('sales_resend', ?)", (SALES_RESEND,))
             row = self.conn.execute("SELECT last_ts FROM sales_seen WHERE market_hash_name = ?", (name,)).fetchone()
             since = row[0] - revise_hours * 3600 if row else -1
             fresh = [p for p in points if p.ts >= since]
@@ -93,9 +99,9 @@ class Buffer:
                 self.conn.execute("DELETE FROM sales WHERE market_hash_name=? AND source=? AND ts=?",
                                   (p.market_hash_name, p.source, p.ts))
             self.conn.executemany(
-                """INSERT INTO sales (market_hash_name, source, ts, median_cents, volume, currency)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                [(p.market_hash_name, p.source, p.ts, p.median_cents, p.volume, p.currency) for p in fresh])
+                """INSERT INTO sales (market_hash_name, source, ts, median_cents, volume, currency, span)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [(p.market_hash_name, p.source, p.ts, p.median_cents, p.volume, p.currency, p.span) for p in fresh])
             if points:
                 self.conn.execute("INSERT OR REPLACE INTO sales_seen VALUES (?, ?)", (name, max(p.ts for p in points)))
             return len(fresh)
