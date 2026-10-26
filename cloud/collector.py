@@ -96,12 +96,13 @@ class Contents:
 
 async def run_items(buf: Buffer, client, login: SteamLogin, contents: Contents, deadline: float):
     """Цены предметов из кейсов для EV: сколько успеем до следующего прохода истории кейсов.
-    Полный круг по ~10 тыс. предметов занимает около суток, дальше каждый день по кругу заново."""
-    cases = set(await asyncio.to_thread(buf.case_names))
+    Кейсы идут по очереди (самые ликвидные первыми), чтобы EV появлялся кейс за кейсом.
+    Полный круг по ~10 тыс. предметов занимает около суток, дальше по кругу заново."""
+    cases = await asyncio.to_thread(buf.cases_by_liquidity)
     if config.EV_CASES:
-        cases &= set(config.EV_CASES)
+        cases = [c for c in cases if c in config.EV_CASES]
     data = await contents.get()
-    names = sorted({n for case, probs in data.items() if case in cases for n in probs})
+    names = list(dict.fromkeys(n for case in cases for n in sorted(data.get(case, {}))))
     if not names:
         return
     await asyncio.to_thread(buf.set_state, "items_total", str(len(names)))

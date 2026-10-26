@@ -98,6 +98,14 @@ class Buffer:
             return [r[0] for r in self.conn.execute(
                 "SELECT market_hash_name FROM items WHERE item_type = 'case' ORDER BY market_hash_name")]
 
+    def cases_by_liquidity(self) -> list[str]:
+        """Кейсы по числу лотов на маркете в последнем снимке, больше лотов — раньше."""
+        with self.lock:
+            return [r[0] for r in self.conn.execute(
+                """SELECT i.market_hash_name FROM items i
+                   LEFT JOIN ticks t ON t.id = (SELECT MAX(id) FROM ticks WHERE market_hash_name = i.market_hash_name)
+                   WHERE i.item_type = 'case' ORDER BY COALESCE(t.listings, 0) DESC, i.market_hash_name""")]
+
     def save_sales(self, name: str, points: list[SalePoint], revise_hours: int = 3) -> int:
         """Кладёт в буфер новые точки истории продаж. Последние revise_hours часов Steam ещё
         дописывает (текущий час растёт), поэтому их перезаписываем с новым id — дом заберёт заново."""
@@ -140,7 +148,8 @@ class Buffer:
             return len(fresh)
 
     def items_to_fetch(self, names: list[str], limit: int) -> list[str]:
-        """Сначала ни разу не запрошенные предметы, потом те, что запрашивались давнее всего."""
+        """Сначала ни разу не запрошенные предметы (в порядке names, то есть кейс за кейсом),
+        потом те, что запрашивались давнее всего. Сортировка устойчивая, порядок names сохраняется."""
         with self.lock:
             seen = dict(self.conn.execute("SELECT market_hash_name, fetched_at FROM item_seen").fetchall())
         return sorted(names, key=lambda n: seen.get(n, 0))[:limit]
