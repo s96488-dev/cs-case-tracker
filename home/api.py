@@ -5,10 +5,12 @@
   /api/news      новости Valve, связанные с кейсом
   /api/ev        EV кейса по дням (ожидаемая стоимость открытия)
   /api/drop      активный дроп кейса: дата ухода или прогноз ухода
+  /api/market    индекс рынка: все кейсы с равными весами, по дням
   /udf/*         UDF-датафид для полной библиотеки TradingView Charting Library
 
 Запуск: python -m home
 """
+import math
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -140,6 +142,39 @@ def api_drop(item_id: int):
     (дата выхода + средний срок прошлых обычных кейсов). Для ивентовых и прочих кейсов — null."""
     rows = q("SELECT market_hash_name FROM items WHERE id = %s", (item_id,))
     return drop_pool.info(rows[0]["market_hash_name"]) if rows else None
+
+
+_market_cache: dict = {"at": 0.0, "data": []}
+
+
+@app.get("/api/market")
+def api_market():
+    """Индекс рынка кейсов по дням: все кейсы с равными весами, цепной. Каждый день — среднее изменение
+    (логарифм дневной медианы) по кейсам, у которых есть продажи и в этот, и в предыдущий день, поэтому
+    появление нового кейса индекс не сдвигает. Старт — 100. Пересчитывается раз в 10 минут."""
+    if time.time() - _market_cache["at"] < 600:
+        return _market_cache["data"]
+    rows = q("""SELECT s.item_id, extract(epoch FROM date_trunc('day', s.ts AT TIME ZONE 'UTC'))::bigint AS day,
+                       sum(s.median_cents::bigint * s.volume)::float / NULLIF(sum(s.volume), 0) AS price
+                FROM sales_history s JOIN items i ON i.id = s.item_id
+                WHERE i.item_type = 'case' AND s.median_cents IS NOT NULL AND s.volume > 0
+                GROUP BY 1, 2 ORDER BY 2""")
+    by_day: dict[int, dict[int, float]] = {}
+    for r in rows:
+        if r["price"]:
+            by_day.setdefault(r["day"], {})[r["item_id"]] = r["price"]
+    out, level, prev = [], 100.0, None
+    for day in sorted(by_day):
+        cur = by_day[day]
+        if prev is not None:
+            # Изменение за день по каждому кейсу, обрезанное до ±50%, чтобы одна случайная сделка не двигала индекс.
+            moves = [max(-0.7, min(0.4, math.log(cur[i] / prev[i]))) for i in cur if i in prev]
+            if moves:
+                level *= math.exp(sum(moves) / len(moves))
+        out.append({"time": day, "value": round(level, 3), "cases": len(cur)})
+        prev = {**(prev or {}), **cur}
+    _market_cache.update(at=time.time(), data=out)
+    return out
 
 
 @app.get("/api/news")

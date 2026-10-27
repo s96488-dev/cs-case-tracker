@@ -29,10 +29,18 @@
   #tools input[type=number], #tools select { background:#232834; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:3px 4px; font-size:12px; }
   #tools input[type=number] { width:58px; }
   #tools button { padding:3px 8px; font-size:12px; }
-  #chart { flex:1; }
+  #chart { flex:1; position:relative; }
+  /* Легенда как в TradingView: название, значение под перекрестием, глаз — скрыть/показать. */
+  .legend { position:absolute; left:8px; top:6px; z-index:3; display:flex; flex-direction:column; gap:2px; font-size:12px; }
+  .legend .it { display:flex; gap:6px; align-items:center; padding:1px 4px; border-radius:3px; background:rgba(15,17,21,0.6); width:max-content; }
+  .legend .it:hover { background:#1f2430; }
+  .legend .it.off .nm, .legend .it.off .val { opacity:0.4; text-decoration:line-through; }
+  .legend .val { color:var(--text); font-variant-numeric:tabular-nums; min-width:40px; }
+  .legend .eye { background:none; border:0; padding:0 2px; cursor:pointer; color:var(--muted); font-size:13px; line-height:1; }
+  .legend .eye:hover { color:var(--text); }
   #ratioBox { height:150px; border-top:1px solid var(--line); position:relative; }
   #ratio { position:absolute; inset:0; }
-  #ratioLabel { position:absolute; left:12px; top:6px; z-index:2; color:var(--muted); font-size:12px; pointer-events:none; }
+  #ratioLabel { position:absolute; right:92px; top:6px; z-index:2; color:var(--muted); font-size:11px; pointer-events:none; text-align:right; max-width:60%; }
   #status { color:var(--muted); font-size:12px; padding:6px 16px; border-top:1px solid var(--line); }
   #news { width:340px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
   #news h2 { font-size:14px; margin:0; padding:8px 8px 8px 12px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; }
@@ -67,9 +75,11 @@
       <button id="scPct" title="Проценты от первого видимого бара: цена и EV стартуют из одной точки">%</button>
       <button id="scSep" title="EV на своей шкале слева: обе линии растягиваются на всю высоту">EV слева</button>
       <button id="scFit" title="Показать всю историю">Вся история</button></span>
+    <span class="grp">Нижняя панель
+      <select id="lowSel"><option value="ev">Цена / EV</option><option value="mkt">Кейс / рынок</option></select></span>
   </div>
   <div id="chart"></div>
-  <div id="ratioBox"><div id="ratioLabel">Цена / EV: выше 1 — кейс дороже того, что из него в среднем выпадает</div><div id="ratio"></div></div>
+  <div id="ratioBox"><div id="ratioLabel"></div><div id="ratio"></div></div>
   <div id="status"></div>
 </main>
 <section id="news"><h2><span>Новости Valve по кейсу</span><button id="newsToggle" title="Свернуть / развернуть">»</button></h2><div id="newsList"></div></section>
@@ -99,6 +109,10 @@ const evLine = chart.addLineSeries({ color: "#4fc3f7", lineWidth: 2, priceLineVi
 const dropLine = chart.addHistogramSeries({ priceScaleId: "drop", priceLineVisible: false, lastValueVisible: false,
   priceFormat: { type: "volume" } });
 chart.priceScale("drop").applyOptions({ scaleMargins: { top: 0.06, bottom: 0 }, visible: false });
+// Индекс рынка: все кейсы с равными весами (старт 100) — на своей невидимой шкале, чтобы форма была сравнима с ценой.
+const mktLine = chart.addLineSeries({ priceScaleId: "mkt", color: "#9ccc65", lineWidth: 1, priceLineVisible: false,
+  lastValueVisible: false, priceFormat: { type: "price", precision: 1, minMove: 0.1 } });
+chart.priceScale("mkt").applyOptions({ scaleMargins: { top: 0.1, bottom: 0.25 }, visible: false });
 // Несглаженный EV тонкой бледной линией под сглаженным.
 const evRaw = chart.addLineSeries({ color: "rgba(79,195,247,0.35)", lineWidth: 1, priceLineVisible: false,
   lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
@@ -109,26 +123,37 @@ const ratioChart = LightweightCharts.createChart(document.getElementById("ratio"
   layout: { background: { color: "#0f1115" }, textColor: "#c7c7c7" },
   grid: { vertLines: { color: "#1c2029" }, horzLines: { color: "#1c2029" } },
   timeScale: { timeVisible: true, secondsVisible: false, visible: false },
-  rightPriceScale: { minimumWidth: 70 },
+  rightPriceScale: { minimumWidth: 80 }, leftPriceScale: { minimumWidth: 80 },
 });
-chart.applyOptions({ rightPriceScale: { minimumWidth: 70 } });
+chart.applyOptions({ rightPriceScale: { minimumWidth: 80 } });
 const ratioLine = ratioChart.addLineSeries({ color: "#ce93d8", lineWidth: 2, priceLineVisible: false,
   priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+// Пустые бары на всех временах верхнего графика: шкала времени в Lightweight Charts идёт по барам, и только при
+// одинаковом наборе баров обе панели двигаются и масштабируются синхронно.
+const ratioTimes = ratioChart.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
+// Нужна, чтобы левая шкала нижней панели существовала и занимала ту же ширину, что и у верхнего графика.
+const ratioLeft = ratioChart.addLineSeries({ priceScaleId: "left", lastValueVisible: false, priceLineVisible: false,
+  color: "rgba(0,0,0,0)", crosshairMarkerVisible: false });
 ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
 // Настройки индикатора и шкалы, запоминаются в браузере.
-const opts = { smType: "", smLen: 7, keyOn: false, keyPrice: 2.49, feeOn: false, log: false, pct: false, sep: false };
+const opts = { smType: "", smLen: 7, keyOn: false, keyPrice: 2.49, feeOn: false, log: false, pct: false, sep: false,
+  low: "ev", hidden: [] };
 try { Object.assign(opts, JSON.parse(localStorage.getItem("evOpts") || "{}")); } catch (e) {}
 const $ = id => document.getElementById(id);
 function saveOpts() { try { localStorage.setItem("evOpts", JSON.stringify(opts)); } catch (e) {} }
 function applyScale() {
   const mode = opts.pct ? LightweightCharts.PriceScaleMode.Percentage
     : opts.log ? LightweightCharts.PriceScaleMode.Logarithmic : LightweightCharts.PriceScaleMode.Normal;
-  chart.applyOptions({ leftPriceScale: { visible: opts.sep, mode, minimumWidth: 70 }, rightPriceScale: { mode } });
+  chart.applyOptions({ leftPriceScale: { visible: opts.sep, mode, minimumWidth: 80 }, rightPriceScale: { mode } });
+  // В режиме % индекс рынка встаёт на общую шкалу: все линии в процентах от одной точки.
+  mktLine.applyOptions({ priceScaleId: opts.pct ? "right" : "mkt" });
+  ratioChart.applyOptions({ leftPriceScale: { visible: opts.sep } });
   for (const s of [evLine, evRaw]) s.applyOptions({ priceScaleId: opts.sep ? "left" : "right" });
   $("scLog").classList.toggle("on", opts.log); $("scPct").classList.toggle("on", opts.pct); $("scSep").classList.toggle("on", opts.sep);
 }
 $("smType").value = opts.smType; $("smLen").value = opts.smLen; $("keyOn").checked = opts.keyOn;
-$("keyPrice").value = opts.keyPrice; $("feeOn").checked = opts.feeOn;
+$("keyPrice").value = opts.keyPrice; $("feeOn").checked = opts.feeOn; $("lowSel").value = opts.low;
+$("lowSel").onchange = () => { opts.low = $("lowSel").value; saveOpts(); renderEv(); };
 for (const id of ["smType", "smLen", "keyOn", "keyPrice", "feeOn"]) $(id).onchange = () => {
   opts.smType = $("smType").value; opts.smLen = Math.max(2, parseInt($("smLen").value) || 7);
   opts.keyOn = $("keyOn").checked; opts.keyPrice = parseFloat($("keyPrice").value) || 0; opts.feeOn = $("feeOn").checked;
@@ -154,8 +179,13 @@ function smooth(data) {
     return { time: d.time, value: sum / Math.min(i + 1, n) }; });
 }
 
+function setLow(data, name) {
+  ratioLine.setData(data);
+  ratioAt = new Map(data.map(d => [d.time, d.value]));
+  if (typeof lowLegend !== "undefined") { lowLegend[0].row.querySelector(".nm").textContent = name; updateLegend(lowLegend); }
+}
 // Последние загруженные данные: при смене настроек индикатора перерисовываем без запросов.
-let evData = [], hist = [];
+let evData = [], hist = [], mktData = [];
 function renderEv() {
   const fee = opts.feeOn ? 1 / 1.15 : 1, key = opts.keyOn ? opts.keyPrice : 0;
   const raw = evData.map(e => ({ time: e.time, value: e.ev }));
@@ -165,25 +195,116 @@ function renderEv() {
   evLine.applyOptions({ title: "EV" + (opts.smType ? ` ${opts.smType.toUpperCase()} ${opts.smLen}` : "")
     + (key ? " − ключ" : "") + (fee < 1 ? " − комиссия" : "") });
   // Отношение: сколько стоит открыть (кейс + ключ, если включён) к тому, что в среднем выпадет (после комиссии).
+  const lastEv = evData[evData.length - 1];
+  if (opts.low === "mkt") {
+    // Сила кейса относительно рынка: цена кейса / индекс рынка, 1 — в начале истории. Растёт — кейс сильнее рынка.
+    const idx = new Map(mktData.map(d => [d.time, d.value]));
+    const pts = hist.filter(h => h.median !== null && idx.get(Math.floor(h.time / 86400) * 86400))
+      .map(h => ({ time: h.time, value: h.median / idx.get(Math.floor(h.time / 86400) * 86400) }));
+    const base = pts.length ? pts[0].value : 1;
+    setLow(pts.map(p => ({ time: p.time, value: p.value / base })), "Кейс / рынок");
+    $("ratioLabel").textContent = "Кейс / индекс рынка (1 — начало истории): растёт — кейс сильнее рынка, падает — слабее";
+    return;
+  }
   const evByDay = new Map(sm.map(d => [d.time, d.value * fee]));
   const evAt = t => evByDay.get(Math.floor(t / 86400) * 86400);
-  ratioLine.setData(hist.filter(h => h.median !== null && evAt(h.time))
-    .map(h => ({ time: h.time, value: (h.median + key) / evAt(h.time) })));
-  const lastEv = evData[evData.length - 1];
   const what = key ? "(кейс + ключ) / EV" : "Цена / EV";
+  setLow(hist.filter(h => h.median !== null && evAt(h.time))
+    .map(h => ({ time: h.time, value: (h.median + key) / evAt(h.time) })), what);
   $("ratioLabel").textContent = lastEv
     ? `${what}${fee < 1 ? " после комиссии" : ""}. EV сейчас $${lastEv.ev.toFixed(2)}, посчитано ${(lastEv.coverage * 100).toFixed(0)}% вероятности. `
       + (key ? "Ниже 1 — открывать выгодно в среднем" : "Выше 1 — кейс дороже того, что из него в среднем выпадает")
     : "Цена / EV: EV этого кейса ещё не посчитан (облако собирает цены предметов кейс за кейсом)";
 }
 
+let medianAt = new Map(), ratioAt = new Map();
+// Синхронизация панелей: одинаковый набор баров (ratioTimes) + общий логический диапазон и перекрестие.
 let syncing = false;
-chart.timeScale().subscribeVisibleTimeRangeChange(r => {
-  if (!r || syncing) return;
+function linkRange(from, to) {
+  from.timeScale().subscribeVisibleLogicalRangeChange(r => {
+    if (!r || syncing) return;
+    syncing = true;
+    try { to.timeScale().setVisibleLogicalRange(r); } catch (e) {}
+    syncing = false;
+  });
+}
+linkRange(chart, ratioChart); linkRange(ratioChart, chart);
+function syncTimes() {
+  const all = new Set();
+  for (const s of [candles, median, volume, evLine, evRaw, dropLine, mktLine])
+    for (let i = 0, d = s.data(); i < d.length; i++) all.add(d[i].time);
+  ratioTimes.setData([...all].sort((a, b) => a - b).map(time => ({ time })));
+  medianAt = new Map(median.data().map(d => [d.time, d.value]));
+  const r = chart.timeScale().getVisibleLogicalRange();
+  if (r) ratioChart.timeScale().setVisibleLogicalRange(r);
+}
+chart.subscribeCrosshairMove(p => {
+  updateLegend(mainLegend, p);
+  if (syncing) return;
   syncing = true;
-  try { ratioChart.timeScale().setVisibleRange(r); } catch (e) {}
+  if (p.time !== undefined) {
+    const v = ratioAt.get(p.time);
+    if (v !== undefined) ratioChart.setCrosshairPosition(v, p.time, ratioLine); else ratioChart.clearCrosshairPosition();
+  } else ratioChart.clearCrosshairPosition();
   syncing = false;
 });
+ratioChart.subscribeCrosshairMove(p => {
+  updateLegend(lowLegend, p);
+  if (syncing) return;
+  syncing = true;
+  const v = p.time !== undefined ? medianAt.get(p.time) : undefined;
+  if (v !== undefined) chart.setCrosshairPosition(v, p.time, median); else chart.clearCrosshairPosition();
+  syncing = false;
+});
+
+// Легенда: каждая строка управляет одной или несколькими сериями; скрытые запоминаются.
+function makeLegend(box, entries) {
+  const el = document.createElement("div");
+  el.className = "legend";
+  box.appendChild(el);
+  for (const e of entries) {
+    const row = document.createElement("div");
+    row.className = "it";
+    row.innerHTML = '<span class="nm"></span><span class="val"></span><button class="eye" title="Скрыть / показать">👁</button>';
+    row.querySelector(".nm").textContent = e.name;
+    row.querySelector(".nm").style.color = e.color;
+    const apply = () => {
+      const off = opts.hidden.includes(e.key);
+      row.classList.toggle("off", off);
+      for (const s of e.series) s.applyOptions({ visible: !off });
+      if (e.onToggle) e.onToggle(off);
+    };
+    row.querySelector(".eye").onclick = () => {
+      opts.hidden = opts.hidden.includes(e.key) ? opts.hidden.filter(k => k !== e.key) : [...opts.hidden, e.key];
+      saveOpts(); apply();
+    };
+    e.row = row; e.val = row.querySelector(".val");
+    el.appendChild(row); apply();
+  }
+  return entries;
+}
+function fmt(v, digits) { return v === undefined || v === null || isNaN(v) ? "" : v.toFixed(digits); }
+function updateLegend(entries, p) {
+  for (const e of entries) {
+    const s = e.series[0];
+    let d = p && p.time !== undefined ? p.seriesData.get(s) : undefined;
+    if (!d) { const all = s.data(); for (let i = all.length - 1; i >= 0; i--) if (all[i].value !== undefined || all[i].close !== undefined) { d = all[i]; break; } }
+    e.val.textContent = !d ? "" : d.close !== undefined
+      ? `${fmt(d.open, 2)} ${fmt(d.high, 2)} ${fmt(d.low, 2)} ${fmt(d.close, 2)}` : fmt(d.value, e.digits);
+  }
+}
+const mainLegend = makeLegend($("chart"), [
+  { key: "candles", name: "Мин. цена (свечи)", color: "#26a69a", series: [candles], digits: 2 },
+  { key: "median", name: "Медиана продаж", color: "#f5a623", series: [median], digits: 2 },
+  { key: "volume", name: "Продано", color: "#8a8f98", series: [volume], digits: 0 },
+  { key: "ev", name: "EV", color: "#4fc3f7", series: [evLine, evRaw], digits: 2 },
+  { key: "mkt", name: "Индекс рынка", color: "#9ccc65", series: [mktLine], digits: 1 },
+  { key: "drop", name: "Линия дропа", color: "#ef5350", series: [dropLine], digits: 0 },
+]);
+mainLegend.find(e => e.key === "drop").val.style.display = "none";
+const lowLegend = makeLegend($("ratioBox"), [
+  { key: "low", name: "Нижняя панель", color: "#ce93d8", series: [ratioLine], digits: 2 },
+]);
 
 const tfs = document.getElementById("tfs");
 for (const [label, val] of Object.entries(TFS)) {
@@ -246,6 +367,9 @@ async function loadChart(fit) {
   } else { dropLine.setData([]); dropLine.setMarkers([]); }
   evData = [];
   if (HOURLY.includes(tf)) evData = await (await fetch(`/api/ev?item_id=${current.id}`)).json();
+  // Индекс рынка — по дням, поэтому как и EV только на таймфреймах от часа.
+  mktData = HOURLY.includes(tf) ? await (await fetch("/api/market")).json() : [];
+  mktLine.setData(mktData.map(d => ({ time: d.time, value: d.value })));
   renderEv();
   // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
   const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
@@ -266,8 +390,8 @@ async function loadChart(fit) {
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
     if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
   }
-  const range = chart.timeScale().getVisibleRange();
-  if (range) try { ratioChart.timeScale().setVisibleRange(range); } catch (e) {}
+  syncTimes();
+  updateLegend(mainLegend); updateLegend(lowLegend);
 }
 
 let newsItems = [];
