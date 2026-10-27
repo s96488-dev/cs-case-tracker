@@ -43,7 +43,7 @@ def seed(force: bool = False) -> None:
 
 def _seed(force: bool) -> None:
     with pool.connection() as conn:
-        if conn.execute("SELECT count(*) AS n FROM items").fetchone()["n"] and not force:
+        if conn.execute("SELECT 1 FROM items LIMIT 1").fetchone() and not force:
             log.info("database is not empty, demo data not added (use --force to add anyway)")
             return
     rng = random.Random(42)
@@ -54,10 +54,12 @@ def _seed(force: bool) -> None:
         daily = _walk(rng, days, price, 0.025)
         ratio = _walk(rng, days, rng.uniform(0.35, 0.7), 0.02)
         with pool.connection() as conn, conn.cursor() as cur:
-            item_id = conn.execute(
+            row = conn.execute(
                 """INSERT INTO items (market_hash_name, item_type) VALUES (%s, 'case')
                    ON CONFLICT (market_hash_name) DO UPDATE SET item_type = 'case' RETURNING id""",
-                (name,)).fetchone()["id"]
+                (name,)).fetchone()
+            assert row is not None
+            item_id = row["id"]
             sales, ev = [], []
             for i, p in enumerate(daily):
                 day = today - (days - 1 - i) * DAY
