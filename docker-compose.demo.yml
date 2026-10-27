@@ -1,0 +1,26 @@
+# Demo: PostgreSQL + the home backend with synthetic data, no cloud or Steam account needed.
+#   docker compose -f docker-compose.demo.yml up --build
+# then open http://localhost:8080
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cs_prices
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+  seed:
+    build: {context: ., dockerfile: home.Dockerfile}
+    command: ["python", "-m", "home.demo"]
+    environment: &db
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cs_prices
+    depends_on:
+      postgres: {condition: service_healthy}
+  home:
+    build: {context: ., dockerfile: home.Dockerfile}
+    environment: *db
+    ports: ["8080:8080"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
