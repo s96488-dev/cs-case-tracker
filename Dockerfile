@@ -1,4 +1,4 @@
-# Образ облачного сборщика.
+# Cloud collector image.
 FROM python:3.12-slim
 WORKDIR /app
 COPY requirements-cloud.txt .

@@ -1,6 +1,6 @@
-"""Расчёт EV кейсов по дням из дневных цен предметов (см. common/ev.py): раз в минуту смотрим, пришли ли новые цены, и пересчитываем не чаще EV_INTERVAL.
+"""Daily case EV from daily item prices (see common/ev.py): every minute we check for new prices and recompute at most every EV_INTERVAL.
 
-Состав кейсов и шансы — common/case_contents.py (открытый набор ByMykel/CSGO-API, скачивается раз в сутки).
+Case contents and odds come from common/case_contents.py (the open ByMykel/CSGO-API dataset, downloaded daily).
 """
 import logging
 import time
@@ -42,7 +42,7 @@ def compute_all(contents: dict[str, dict[str, float]]) -> int:
             item_days.setdefault(r["market_hash_name"], []).append((_epoch(r["day"]), r["median_cents"], r["volume"]))
         start = min(d[0][0] for d in item_days.values())
         series = case_ev(probs, item_days, start, today)
-        # Облако собирает кейсы по очереди: пока цены кейса собраны не полностью, EV занижен — не показываем.
+        # The cloud collects cases one by one: until a case's prices are mostly collected its EV is too low, so skip it.
         if not series or series[-1][2] < MIN_COVERAGE:
             continue
         with pool.connection() as conn, conn.cursor() as cur:
@@ -68,7 +68,7 @@ def run_forever(stop):
                 if cursor and cursor != last_cursor and time.time() - computed_at >= config.EV_INTERVAL:
                     n = compute_all(contents)
                     last_cursor, computed_at = cursor, time.time()
-                    log.info("EV пересчитан для %d кейсов", n)
-            except Exception as e:  # нет сети до GitHub и т.п.: попробуем позже
-                log.warning("EV не посчитан: %r", e)
+                    log.info("EV recomputed for %d cases", n)
+            except Exception as e:  # no network to GitHub etc.: try again later
+                log.warning("EV not computed: %r", e)
             stop.wait(60)

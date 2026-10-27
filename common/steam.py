@@ -1,12 +1,12 @@
-"""Сбор цен с Steam Community Market.
+"""Price collection from the Steam Community Market.
 
-Используем поиск маркета (search/render, norender=1) — это JSON-эндпоинт самого Steam, тот же,
-что дёргает страница маркета. Steam отдаёт не больше 10 предметов за запрос
-(параметр count больше 10 игнорируется), поэтому все ~45 кейсов — это ~5 запросов с паузами
-внутри одной минуты. Браузерные скраперы и прокси для такой частоты не нужны.
+We use the market search (search/render, norender=1): Steam's own JSON endpoint, the same one
+the market page calls. Steam returns at most 10 items per request (count above 10 is ignored),
+so all ~45 cases take ~5 requests with pauses within one minute. No browser scrapers or
+proxies are needed at this rate.
 
-priceoverview (медиана и объём за 24 ч) требует отдельный запрос на каждый предмет: ~45 кейсов
-в минуту гарантированно упрутся в лимит, поэтому он здесь не используется.
+priceoverview (24h median and volume) needs a separate request per item: ~45 cases a minute
+would always hit the rate limit, so it is not used here.
 """
 import asyncio
 import logging
@@ -28,8 +28,8 @@ class SteamRateLimited(Exception):
 
 
 def is_case(name: str) -> bool:
-    """Оружейные кейсы называются '... Case'. Капсулы, сувенирные наборы и ключи
-    ('... Case Key') сюда не попадают."""
+    """Weapon cases are named '... Case'. Capsules, souvenir packages and keys
+    ('... Case Key') are excluded."""
     return name.endswith(" Case")
 
 
@@ -57,14 +57,14 @@ async def fetch_cases(client: AsyncSession, ts: int) -> tuple[list[PriceTick], l
             "sort_column": "name", "sort_dir": "asc",
         })
         if r.status_code == 429:
-            if ticks:  # часть страниц уже получена: сохраняем их, остальное возьмём в следующую минуту
-                log.warning("Steam ответил 429 на странице start=%d, сохраняю %d цен", start, len(ticks))
+            if ticks:  # some pages already arrived: keep them, the rest comes next minute
+                log.warning("Steam returned 429 on page start=%d, keeping %d prices", start, len(ticks))
                 return ticks, items
-            raise SteamRateLimited("Steam ответил 429 (слишком много запросов)")
+            raise SteamRateLimited("Steam returned 429 (too many requests)")
         r.raise_for_status()
         data = r.json()
         if not isinstance(data, dict) or not data.get("success"):
-            raise RuntimeError(f"Steam ответил success=false: {str(data)[:200]}")
+            raise RuntimeError(f"Steam returned success=false: {str(data)[:200]}")
         total = data.get("total_count", 0)
         page = data.get("results") or []
         if not page:
@@ -74,23 +74,23 @@ async def fetch_cases(client: AsyncSession, ts: int) -> tuple[list[PriceTick], l
         items += i
         start += len(page)
         if start < total:
-            await asyncio.sleep(PAGE_PAUSE)  # не частим между страницами
+            await asyncio.sleep(PAGE_PAUSE)  # pause between pages
     return ticks, items
 
 
 def make_client(proxy: str | None = None) -> AsyncSession:
-    """HTTP-клиент с TLS-отпечатком и заголовками настоящего Chrome. Обычные Python-клиенты
-    (httpx, requests, urllib) Steam распознаёт по TLS-рукопожатию и отвечает им 429."""
+    """HTTP client with the TLS fingerprint and headers of a real Chrome. Plain Python clients
+    (httpx, requests, urllib) are recognized by Steam from the TLS handshake and get 429."""
     return AsyncSession(impersonate=IMPERSONATE, timeout=30, proxy=proxy,
                         headers={"Accept-Language": "en-US,en;q=0.9"})
 
 
-# ---------- История продаж (нужен логин) ----------
+# ---------- Sales history (login required) ----------
 
 HISTORY_URL = "https://steamcommunity.com/market/pricehistory/"
 _MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
-# pricehistory отдаёт цены в валюте кошелька аккаунта, параметр currency игнорирует.
+# pricehistory returns prices in the account wallet currency and ignores the currency parameter.
 _CURRENCY_BY_SYMBOL = {"$": "USD", "€": "EUR", "£": "GBP", "₴": "UAH", "pуб.": "RUB", "руб.": "RUB",
                        "₸": "KZT", "zł": "PLN", "¥": "CNY", "R$": "BRL", "₺": "TRY", "CHF": "CHF"}
 
@@ -100,7 +100,7 @@ class SteamAuthError(Exception):
 
 
 def parse_history_date(s: str) -> int:
-    """'Oct 24 2026 01: +0' -> unix-время (UTC)."""
+    """'Oct 24 2026 01: +0' -> unix time (UTC)."""
     from calendar import timegm
     mon, day, year, hour = s.split()[:4]
     return timegm((int(year), _MONTHS[mon], int(day), int(hour.rstrip(":")), 0, 0))
@@ -109,13 +109,13 @@ def parse_history_date(s: str) -> int:
 def parse_history(name: str, data: dict) -> list[SalePoint]:
     sym = (data.get("price_prefix") or data.get("price_suffix") or "").strip()
     currency = _CURRENCY_BY_SYMBOL.get(sym, sym or "USD")
-    # Храним только доллары. Если Steam отдал медиану в другой валюте (валюта/страна аккаунта, параметр
-    # currency он игнорирует), медиану отбрасываем: пересчёт прошлых цен по сегодняшнему курсу исказил бы
-    # данные. Число продаж от валюты не зависит, его сохраняем всегда.
+    # Only USD is stored. If Steam returned the median in another currency (account wallet/country; it
+    # ignores the currency parameter), the median is dropped: converting past prices at today's rate would
+    # distort the data. The number of sales does not depend on currency and is always kept.
     usd = currency == "USD"
     rows = [(parse_history_date(r[0]), r[1], r[2]) for r in data.get("prices") or []]
-    # Последние ~30 дней Steam отдаёт по часам, а всё, что старше, по дням: одна точка в сутки с часом 01.
-    # Часовая часть начинается с первого дня, где точек больше одной.
+    # Steam returns the last ~30 days hourly and everything older daily: one point per day at hour 01.
+    # The hourly part starts on the first day with more than one point.
     per_day: dict[int, int] = {}
     for ts, _, _ in rows:
         per_day[ts // 86400] = per_day.get(ts // 86400, 0) + 1
@@ -132,23 +132,23 @@ async def fetch_price_history(client: AsyncSession, name: str, login_secure: str
     r = await client.get(HISTORY_URL, params={"appid": 730, "market_hash_name": name, "currency": 1},
                          cookies={"steamLoginSecure": login_secure})
     if r.status_code == 429:
-        raise SteamRateLimited("Steam ответил 429 на pricehistory")
+        raise SteamRateLimited("Steam returned 429 on pricehistory")
     if r.status_code in (400, 401, 403):
-        raise SteamAuthError(f"pricehistory: HTTP {r.status_code}, cookie steamLoginSecure устарел или неверный")
+        raise SteamAuthError(f"pricehistory: HTTP {r.status_code}, steamLoginSecure cookie expired or invalid")
     r.raise_for_status()
     data = r.json()
     if not isinstance(data, dict) or not data.get("success"):
-        raise SteamAuthError("pricehistory: success=false, cookie steamLoginSecure устарел или неверный")
+        raise SteamAuthError("pricehistory: success=false, steamLoginSecure cookie expired or invalid")
     return parse_history(name, data)
 
 
-# ---------- Продление логина ----------
+# ---------- Login renewal ----------
 #
-# steamLoginSecure = "<steamid>%7C%7C<access token>", а access token Steam выдаёт ровно на сутки.
-# Браузер продлевает его через долгоживущий refresh token (cookie steamRefresh_steam на
-# login.steampowered.com): login.steampowered.com/jwt/refresh перенаправляет на
-# steamcommunity.com/login/settoken, и тот ставит свежий steamLoginSecure. Делаем то же самое.
-# (IAuthenticationService/GenerateAccessTokenForApp токен из браузера не принимает.)
+# steamLoginSecure = "<steamid>%7C%7C<access token>", and Steam issues the access token for exactly one day.
+# The browser renews it with a long-lived refresh token (steamRefresh_steam cookie on
+# login.steampowered.com): login.steampowered.com/jwt/refresh redirects to
+# steamcommunity.com/login/settoken, which sets a fresh steamLoginSecure. We do the same.
+# (IAuthenticationService/GenerateAccessTokenForApp does not accept the browser token.)
 
 JWT_REFRESH_URL = "https://login.steampowered.com/jwt/refresh"
 
@@ -158,7 +158,7 @@ def split_login_cookie(value: str) -> tuple[str, str]:
     from urllib.parse import unquote
     steamid, sep, token = unquote(value.strip()).partition("||")
     if not sep or not steamid.isdigit() or token.count(".") != 2:
-        raise SteamAuthError("значение cookie не похоже на токен Steam (нет '%7C%7C' или JWT)")
+        raise SteamAuthError("cookie value does not look like a Steam token (no '%7C%7C' or JWT)")
     return steamid, token
 
 
@@ -171,20 +171,20 @@ def jwt_expires_at(token: str) -> int:
 
 
 async def refresh_login_secure(refresh_cookie: str, proxy: str | None = None) -> str:
-    """Получает свежий steamLoginSecure по refresh token, повторяя путь браузера.
-    Отдельная сессия, чтобы полученные cookie не смешивались с основным клиентом."""
+    """Gets a fresh steamLoginSecure from the refresh token, following the browser flow.
+    A separate session so the received cookies do not mix with the main client."""
     from urllib.parse import urlparse
-    split_login_cookie(refresh_cookie)  # проверка формата
+    split_login_cookie(refresh_cookie)  # format check
     async with make_client(proxy) as s:
         s.cookies.set("steamRefresh_steam", refresh_cookie.strip(), domain=urlparse(JWT_REFRESH_URL).hostname)
         r = await s.get(JWT_REFRESH_URL, params={"redir": "https://steamcommunity.com/"}, allow_redirects=False)
         location = r.headers.get("location", "")
         if r.status_code not in (301, 302, 303) or "/login/settoken" not in location:
-            raise SteamAuthError(f"продление токена: Steam ответил {r.status_code} без перехода на settoken, "
-                                 "refresh token устарел или отозван")
+            raise SteamAuthError(f"token renewal: Steam returned {r.status_code} without redirecting to settoken, "
+                                 "refresh token expired or revoked")
         await s.get(location, allow_redirects=False)
         value = next((c.value for c in s.cookies.jar if c.name == "steamLoginSecure"), None)
     if not value:
-        raise SteamAuthError("продление токена: Steam не выдал steamLoginSecure, refresh token устарел или отозван")
+        raise SteamAuthError("token renewal: Steam did not issue steamLoginSecure, refresh token expired or revoked")
     split_login_cookie(value)
     return value

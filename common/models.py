@@ -1,8 +1,8 @@
-"""Модель данных, общая для облака и дома.
+"""Data model shared by the cloud and home parts.
 
-Сейчас отслеживаем только кейсы, у них нет своих параметров: хватает базового Item.
-Для скинов позже появятся износ, float, StatTrak, редкость и т.д. Они пойдут в `attributes`
-(JSON/JSONB в таблице items), а в коде — в наследника Item. Таблица цен при этом не меняется.
+For now only cases are tracked; they have no attributes of their own, so the base Item is enough.
+Skins will later add wear, float, StatTrak, rarity, etc. Those go into `attributes`
+(JSON/JSONB in the items table) and into an Item subclass in code. The price table stays the same.
 """
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,7 +10,7 @@ from typing import Any
 
 @dataclass
 class Item:
-    market_hash_name: str          # уникальное имя предмета в Steam
+    market_hash_name: str          # unique item name on Steam
     item_type: str = "case"        # case | skin | sticker | ...
     icon_url: str | None = None
     attributes: dict[str, Any] = field(default_factory=dict)
@@ -23,23 +23,23 @@ class Case(Item):
 
 @dataclass
 class PriceTick:
-    """Один снимок цены предмета на Steam Market."""
+    """One price snapshot of an item on the Steam Market."""
     market_hash_name: str
-    ts: int                        # unix-время снимка, секунды UTC (кратно минуте)
-    price_cents: int               # минимальная цена продажи, в центах
-    listings: int | None = None    # сколько лотов выставлено на продажу
+    ts: int                        # snapshot unix time, UTC seconds (minute-aligned)
+    price_cents: int               # lowest sell price, in cents
+    listings: int | None = None    # number of listings for sale
     currency: str = "USD"
     source: str = "steam"
 
 
 @dataclass
 class SalePoint:
-    """Точка истории продаж Steam (pricehistory): медианная цена и число продаж за период.
-    Последние ~30 дней — по часам, раньше — по дням."""
+    """A Steam sales-history point (pricehistory): median price and units sold over a period.
+    The last ~30 days are hourly, older ones daily."""
     market_hash_name: str
-    ts: int                        # начало периода, unix-время UTC
-    median_cents: int | None       # медианная цена продаж в центах USD; None, если Steam отдал не доллары
-    volume: int                    # сколько штук продано за период
+    ts: int                        # period start, unix time UTC
+    median_cents: int | None       # median sale price in USD cents; None if Steam returned another currency
+    volume: int                    # units sold in the period
     currency: str = "USD"
     source: str = "steam"
-    span: int = 3600               # длина периода, секунды: 3600 (час) или 86400 (день)
+    span: int = 3600               # period length, seconds: 3600 (hour) or 86400 (day)

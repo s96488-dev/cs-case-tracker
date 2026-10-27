@@ -1,7 +1,7 @@
-"""Синхронизатор: забирает новые снимки из облачного буфера и пишет в локальный PostgreSQL.
+"""Sync: pulls new snapshots from the cloud buffer and writes them to the local PostgreSQL.
 
-Если компьютер был выключен, при следующем запуске он догонит всё, что накопилось в облаке.
-Запись идемпотентна (первичный ключ item_id+source+ts), поэтому повторная загрузка не создаёт дублей.
+If the computer was off, on the next start it catches up with everything accumulated in the cloud.
+Writes are idempotent (primary key item_id+source+ts), so re-loading creates no duplicates.
 """
 import logging
 import time
@@ -45,7 +45,7 @@ def _store(conn, batch: dict, new_cursor: int):
 
 
 def sync_once(client: httpx.Client) -> int:
-    """Забирает всё, что накопилось. Возвращает число полученных снимков."""
+    """Pulls everything accumulated. Returns the number of snapshots received."""
     total = 0
     while True:
         with pool.connection() as conn:
@@ -54,9 +54,9 @@ def sync_once(client: httpx.Client) -> int:
         r.raise_for_status()
         batch = r.json()
         if batch["max_id"] < cursor:
-            # Облачный буфер пересоздали и нумерация началась заново: забираем с начала,
-            # дубли отсеются первичным ключом.
-            log.warning("буфер в облаке пересоздан (max_id %s < курсора %s), сбрасываю курсор",
+            # The cloud buffer was recreated and ids restarted: pull from the beginning,
+            # duplicates are filtered out by the primary key.
+            log.warning("cloud buffer recreated (max_id %s < cursor %s), resetting the cursor",
                         batch["max_id"], cursor)
             with pool.connection() as conn:
                 _set_cursor(conn, "cloud_cursor", 0)
@@ -64,11 +64,11 @@ def sync_once(client: httpx.Client) -> int:
         if not batch["ticks"]:
             return total
         new_cursor = batch["ticks"][-1]["id"]
-        with pool.connection() as conn:  # одна транзакция: данные + курсор
+        with pool.connection() as conn:  # one transaction: data + cursor
             _store(conn, batch, new_cursor)
         client.post(f"{config.CLOUD_URL}/api/ack", json={"up_to_id": new_cursor}).raise_for_status()
         total += len(batch["ticks"])
-        log.info("получено %d снимков, курсор %d", len(batch["ticks"]), new_cursor)
+        log.info("received %d snapshots, cursor %d", len(batch["ticks"]), new_cursor)
         if not batch["has_more"]:
             return total
 
@@ -78,14 +78,14 @@ def _store_sales(conn, rows: list[dict], new_cursor: int):
     ids = {r["market_hash_name"]: r["id"] for r in conn.execute(
         "SELECT id, market_hash_name FROM items WHERE market_hash_name = ANY(%s)", (names,)).fetchall()}
     for n in names:
-        if n not in ids:  # история пришла раньше первой цены этого предмета
+        if n not in ids:  # history arrived before the first price of this item
             ids[n] = conn.execute(
                 """INSERT INTO items (market_hash_name, item_type) VALUES (%s, 'case')
                    ON CONFLICT (market_hash_name) DO UPDATE SET item_type = items.item_type
                    RETURNING id""", (n,)).fetchone()["id"]
     with conn.cursor() as cur:
-        # Дневная точка заменяет часовые точки того же дня, если они сохранились раньше (Steam уже свернул
-        # тот день в одну точку). Иначе продажи этого дня посчитались бы дважды.
+        # A daily point replaces hourly points of the same day stored earlier (Steam has since folded
+        # that day into one point). Otherwise that day's sales would be counted twice.
         daily = [r for r in rows if r.get("span", 3600) == 86400]
         cur.executemany(
             """DELETE FROM sales_history WHERE item_id = %s AND source = %s
@@ -106,18 +106,18 @@ def _store_sales(conn, rows: list[dict], new_cursor: int):
 
 
 def sync_sales_once(client: httpx.Client) -> int:
-    """Забирает накопившуюся историю продаж (первый раз — за все годы, это может быть 100+ тыс. точек)."""
+    """Pulls accumulated sales history (the first time it spans years, possibly 100k+ points)."""
     total = 0
     while True:
         with pool.connection() as conn:
             cursor = _cursor(conn, "cloud_sales_cursor")
         r = client.get(f"{config.CLOUD_URL}/api/sales", params={"after_id": cursor, "limit": config.SYNC_BATCH})
-        if r.status_code == 404:  # облако ещё старой версии, без истории продаж
+        if r.status_code == 404:  # cloud runs an older version without sales history
             return 0
         r.raise_for_status()
         batch = r.json()
         if batch["max_id"] < cursor:
-            log.warning("буфер продаж в облаке пересоздан, сбрасываю курсор")
+            log.warning("cloud sales buffer recreated, resetting the cursor")
             with pool.connection() as conn:
                 _set_cursor(conn, "cloud_sales_cursor", 0)
             continue
@@ -128,24 +128,24 @@ def sync_sales_once(client: httpx.Client) -> int:
             _store_sales(conn, batch["sales"], new_cursor)
         client.post(f"{config.CLOUD_URL}/api/ack", json={"sales_up_to_id": new_cursor}).raise_for_status()
         total += len(batch["sales"])
-        log.info("получено %d точек истории продаж, курсор %d", len(batch["sales"]), new_cursor)
+        log.info("received %d sales-history points, cursor %d", len(batch["sales"]), new_cursor)
         if not batch["has_more"]:
             return total
 
 
 def sync_items_once(client: httpx.Client) -> int:
-    """Дневные цены предметов из кейсов (для EV). Первый раз — история ~10 тыс. предметов за годы."""
+    """Daily prices of items inside cases (for EV). The first time it is years of history for ~10k items."""
     total = 0
     while True:
         with pool.connection() as conn:
             cursor = _cursor(conn, "cloud_items_cursor")
         r = client.get(f"{config.CLOUD_URL}/api/item_days", params={"after_id": cursor, "limit": config.SYNC_BATCH})
-        if r.status_code == 404:  # облако ещё старой версии
+        if r.status_code == 404:  # cloud runs an older version
             return 0
         r.raise_for_status()
         batch = r.json()
         if batch["max_id"] < cursor:
-            log.warning("буфер цен предметов в облаке пересоздан, сбрасываю курсор")
+            log.warning("cloud item-price buffer recreated, resetting the cursor")
             with pool.connection() as conn:
                 _set_cursor(conn, "cloud_items_cursor", 0)
             continue
@@ -163,7 +163,7 @@ def sync_items_once(client: httpx.Client) -> int:
             _set_cursor(conn, "cloud_items_cursor", new_cursor)
         client.post(f"{config.CLOUD_URL}/api/ack", json={"items_up_to_id": new_cursor}).raise_for_status()
         total += len(batch["items"])
-        log.info("получено %d дневных цен предметов, курсор %d", len(batch["items"]), new_cursor)
+        log.info("received %d daily item prices, cursor %d", len(batch["items"]), new_cursor)
         if not batch["has_more"]:
             return total
 
@@ -175,8 +175,8 @@ def run_forever(stop=None):
                 sync_once(client)
                 sync_sales_once(client)
                 sync_items_once(client)
-            except Exception as e:  # облако недоступно, нет интернета и т.п. — попробуем позже
-                log.warning("синхронизация не удалась: %r", e)
+            except Exception as e:  # cloud unreachable, no internet, etc.: try again later
+                log.warning("sync failed: %r", e)
             if stop:
                 stop.wait(config.SYNC_INTERVAL)
             else:

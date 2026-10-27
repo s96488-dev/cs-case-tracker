@@ -1,15 +1,15 @@
-"""История активного дропа обычных кейсов и прогноз, когда кейс уйдёт из активного дропа.
+"""Active drop pool history of regular cases and a forecast of when a case leaves the active pool.
 
-Даты ухода (перевод в редкий дроп или удаление из дропа) — история пула на skinory.io
-(https://skinory.io/en/cs2-droppool-now/history). Даты выхода — фактические релизы по патчноутам.
-Прогноз для кейса в активном дропе: дата выхода + средний срок жизни прошлых обычных кейсов.
-Операционные, eSports, Winter Offensive, CS20, первые три Weapon Case и кейсы Armory (Gallery, Fever)
-в расчёт не входят и линии не получают.
+Exit dates (moved to the rare pool or removed from drops) come from the pool history on skinory.io
+(https://skinory.io/en/cs2-droppool-now/history). Release dates are the actual releases from patch notes.
+Forecast for a case still in the active pool: release date + the average lifetime of past regular cases.
+Operation, eSports, Winter Offensive, CS20, the first three Weapon Cases and Armory cases (Gallery, Fever)
+are excluded from the average and get no line.
 """
 from datetime import date, timedelta
 from statistics import mean
 
-# Кейс: (вышел, ушёл из активного дропа или None, если ещё в нём).
+# Case: (released, left the active pool or None if still in it).
 CASES: dict[str, tuple[str, str | None]] = {
     "Huntsman Weapon Case": ("2014-05-01", "2015-04-15"),
     "Chroma Case": ("2015-01-08", "2015-09-17"),
@@ -30,7 +30,7 @@ CASES: dict[str, tuple[str, str | None]] = {
     "Prisma 2 Case": ("2020-03-31", "2022-07-01"),
     "Fracture Case": ("2020-08-06", "2025-09-17"),
     "Snakebite Case": ("2021-05-03", "2024-02-07"),
-    "Recoil Case": ("2022-07-01", "2026-03-12"),  # убран из дропа совсем, минуя редкий
+    "Recoil Case": ("2022-07-01", "2026-03-12"),  # removed from drops entirely, skipping the rare pool
     "Dreams & Nightmares Case": ("2022-01-20", None),
     "Revolution Case": ("2023-02-09", None),
     "Kilowatt Case": ("2024-02-06", None),
@@ -45,7 +45,7 @@ MEAN_DAYS = round(mean(_days(r, l) for r, l in CASES.values() if l))
 
 
 def info(name: str) -> dict | None:
-    """Для обычного кейса: дата выхода, дата ухода из активного дропа (или прогноз) и средний срок."""
+    """For a regular case: release date, date it left the active pool (or a forecast) and the average lifetime."""
     if name not in CASES:
         return None
     released, left = CASES[name]

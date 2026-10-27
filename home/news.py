@@ -1,7 +1,7 @@
-"""Новости Valve по CS: забирает официальные анонсы из Steam News API и связывает их с кейсами.
+"""Valve CS news: pulls official announcements from the Steam News API and links them to cases.
 
-При первом запуске загружает всю ленту за все годы, дальше раз в час докачивает новые.
-Новость привязывается к кейсу, если в её заголовке или тексте есть точное название кейса.
+The first run loads the whole feed for all years, then new items are fetched hourly.
+A news item is linked to a case if its title or text contains the exact case name.
 """
 import logging
 import re
@@ -35,7 +35,7 @@ def _known(conn) -> tuple[set[str], int | None]:
 
 
 def fetch_news(client: httpx.Client) -> int:
-    """Докачивает новости от свежих к старым, пока не дойдёт до уже сохранённых или до конца ленты."""
+    """Fetches news from newest to oldest until it reaches already stored items or the end of the feed."""
     with pool.connection() as conn:
         known, newest = _known(conn)
     added, enddate = [], None
@@ -49,7 +49,7 @@ def fetch_news(client: httpx.Client) -> int:
         oldest = min(n["date"] for n in page)
         if newest and oldest <= newest:
             break
-        # enddate включительно: новости с той же секундой придут повторно и отсеются по gid.
+        # enddate is inclusive: items with the same second come again and are filtered out by gid.
         enddate = oldest
     if added:
         with pool.connection() as conn, conn.cursor() as cur:
@@ -62,7 +62,7 @@ def fetch_news(client: httpx.Client) -> int:
 
 
 def _patterns(name: str) -> list[re.Pattern]:
-    """«CS:GO Weapon Case» не должен совпадать с «CS:GO Weapon Case 2», поэтому после названия не цифра."""
+    """'CS:GO Weapon Case' must not match 'CS:GO Weapon Case 2', so the name must not be followed by a digit."""
     names = {name}
     if name.endswith(" Weapon Case"):
         names.add(name[: -len(" Weapon Case")] + " Case")
@@ -70,7 +70,7 @@ def _patterns(name: str) -> list[re.Pattern]:
 
 
 def link_news() -> int:
-    """Пересчитывает связи новостей с кейсами (новостей тысячи, кейсов десятки, это быстро)."""
+    """Rebuilds news-to-case links (thousands of news, dozens of cases, so it is fast)."""
     with pool.connection() as conn:
         items = conn.execute("SELECT id, market_hash_name FROM items WHERE item_type = 'case'").fetchall()
         news = conn.execute("SELECT gid, title, contents FROM news").fetchall()
@@ -93,7 +93,7 @@ def run_forever(stop):
                 added = fetch_news(client)
                 links = link_news()
                 if added:
-                    log.info("новостей добавлено: %s, связей с кейсами: %s", added, links)
-            except Exception as e:  # сеть или Steam недоступны: попробуем в следующий раз
-                log.warning("новости не загрузились: %s", e)
+                    log.info("news added: %s, links to cases: %s", added, links)
+            except Exception as e:  # network or Steam unavailable: try next time
+                log.warning("news failed to load: %s", e)
             stop.wait(config.NEWS_INTERVAL)

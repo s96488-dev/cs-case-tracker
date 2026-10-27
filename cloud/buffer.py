@@ -1,8 +1,8 @@
-"""Буфер в облаке (SQLite). Хранит снимки, пока домашний компьютер их не заберёт.
+"""Cloud-side buffer (SQLite). Keeps snapshots until the home machine pulls them.
 
-Каждая запись получает возрастающий id. Дом забирает записи с id > своего курсора и
-подтверждает (ack) последний сохранённый id. Подтверждённые записи удаляются через
-RETENTION_HOURS (запас на случай сбоя дома), неподтверждённые хранятся до MAX_DAYS.
+Every row gets an increasing id. Home pulls rows with id > its cursor and acknowledges
+(ack) the last id it stored. Acknowledged rows are deleted after RETENTION_HOURS (a safety
+margin in case home loses data); unacknowledged rows are kept for up to MAX_DAYS.
 """
 import sqlite3
 import threading
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from common.models import Item, PriceTick, SalePoint
 
-# Версия формата истории продаж: при её смене облако один раз заново отдаёт дому всю историю.
+# Sales history format version: when it changes, the cloud re-sends the whole history to home once.
 SALES_RESEND = "2"
 
 SCHEMA = """
@@ -40,14 +40,14 @@ CREATE TABLE IF NOT EXISTS sales (
     currency         TEXT    NOT NULL,
     UNIQUE (market_hash_name, source, ts)
 );
--- Последняя известная точка истории продаж по каждому предмету: чтобы не слать домой всю
--- историю каждый час. Отдельно от sales, потому что sales чистится после подтверждения.
+-- Last known sales-history point per item, so we do not send the whole history home
+-- every hour. Separate from sales because sales is pruned after acknowledgement.
 CREATE TABLE IF NOT EXISTS sales_seen (
     market_hash_name TEXT PRIMARY KEY,
     last_ts          INTEGER NOT NULL
 );
--- Цены предметов из кейсов (скины, ножи, перчатки) по дням: медиана и объём продаж за день.
--- Нужны дому для расчёта EV кейсов. Как и sales, чистится после подтверждения.
+-- Daily prices of items inside cases (skins, knives, gloves): median and volume per day.
+-- Home uses them to compute case EV. Pruned after acknowledgement, like sales.
 CREATE TABLE IF NOT EXISTS item_days (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     market_hash_name TEXT    NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS item_days (
     volume           INTEGER NOT NULL,
     UNIQUE (market_hash_name, day)
 );
--- Когда предмет последний раз запрашивали и до какого дня история уже отдана дому.
+-- When an item was last fetched and up to which day its history has been sent home.
 CREATE TABLE IF NOT EXISTS item_seen (
     market_hash_name TEXT PRIMARY KEY,
     last_day         INTEGER NOT NULL,
@@ -99,7 +99,7 @@ class Buffer:
                 "SELECT market_hash_name FROM items WHERE item_type = 'case' ORDER BY market_hash_name")]
 
     def cases_by_liquidity(self) -> list[str]:
-        """Кейсы по числу лотов на маркете в последнем снимке, больше лотов — раньше."""
+        """Cases ordered by number of market listings in the latest snapshot, most listed first."""
         with self.lock:
             return [r[0] for r in self.conn.execute(
                 """SELECT i.market_hash_name FROM items i
@@ -107,12 +107,12 @@ class Buffer:
                    WHERE i.item_type = 'case' ORDER BY COALESCE(t.listings, 0) DESC, i.market_hash_name""")]
 
     def save_sales(self, name: str, points: list[SalePoint], revise_hours: int = 3) -> int:
-        """Кладёт в буфер новые точки истории продаж. Последние revise_hours часов Steam ещё
-        дописывает (текущий час растёт), поэтому их перезаписываем с новым id — дом заберёт заново."""
+        """Stores new sales-history points. Steam keeps updating the last revise_hours hours (the current
+        hour is still growing), so those are rewritten with a new id and home pulls them again."""
         with self.lock, self.conn:
-            # Всю историю всех кейсов отдаём дому заново один раз на каждую версию формата:
-            # 1 — появились цены в USD (вход с долларового аккаунта), 2 — точки помечены часовыми или дневными.
-            # Дом допишет новое к уже сохранённым точкам.
+            # Re-send the full history of every case once per format version:
+            # 1 - prices in USD (USD wallet account), 2 - points marked as hourly or daily.
+            # Home merges new points with the ones it already has.
             if any(p.median_cents is not None for p in points) and self._state("sales_resend") != SALES_RESEND:
                 self.conn.execute("DELETE FROM sales_seen")
                 self.conn.execute("INSERT OR REPLACE INTO state VALUES ('sales_resend', ?)", (SALES_RESEND,))
@@ -131,8 +131,8 @@ class Buffer:
             return len(fresh)
 
     def save_item_days(self, name: str, days: list[tuple[int, int, int]], revise_days: int = 2) -> int:
-        """Дневные точки предмета [(день, медиана, объём)]. Последние revise_days дней ещё дописываются,
-        их перезаписываем с новым id; более старые уже отданы дому и повторно не отправляются."""
+        """Daily points of an item [(day, median, volume)]. The last revise_days days are still changing,
+        so they are rewritten with a new id; older days were already sent home and are not re-sent."""
         now = int(time.time())
         with self.lock, self.conn:
             row = self.conn.execute("SELECT last_day FROM item_seen WHERE market_hash_name = ?", (name,)).fetchone()
@@ -148,8 +148,8 @@ class Buffer:
             return len(fresh)
 
     def items_to_fetch(self, names: list[str], limit: int) -> list[str]:
-        """Сначала ни разу не запрошенные предметы (в порядке names, то есть кейс за кейсом),
-        потом те, что запрашивались давнее всего. Сортировка устойчивая, порядок names сохраняется."""
+        """Never-fetched items first (in the order of names, i.e. case by case), then the ones
+        fetched longest ago. The sort is stable, so the order of names is preserved."""
         with self.lock:
             seen = dict(self.conn.execute("SELECT market_hash_name, fetched_at FROM item_seen").fetchall())
         return sorted(names, key=lambda n: seen.get(n, 0))[:limit]
@@ -200,7 +200,7 @@ class Buffer:
             n = self.conn.execute("DELETE FROM ticks WHERE id <= ? AND ts < ?",
                                   (acked, now - retention_hours * 3600)).rowcount
             n += self.conn.execute("DELETE FROM ticks WHERE ts < ?", (now - max_days * 86400,)).rowcount
-            # Историю продаж (она бывает за годы) удаляем по времени поступления, а не по ts точки.
+            # Sales history (it spans years) is pruned by arrival time, not by the point timestamp.
             sacked = int(self._state("sales_acked_id") or 0)
             n += self.conn.execute("DELETE FROM sales WHERE id <= ?", (sacked,)).rowcount
             iacked = int(self._state("items_acked_id") or 0)

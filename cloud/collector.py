@@ -1,10 +1,10 @@
-"""Циклы сбора.
+"""Collection loops.
 
-prices:  раз в STEAM_INTERVAL секунд (по умолчанию каждую минуту) минимальные цены и лоты всех кейсов.
-history: раз в HISTORY_INTERVAL секунд (по умолчанию раз в час) история продаж каждого кейса —
-         медиана и число продаж по часам. Первый проход догружает всю историю за годы.
-         Суточный токен логина продлевается сам, если задан STEAM_REFRESH_TOKEN.
-При 429 оба цикла увеличивают паузу, пока Steam не отпустит."""
+prices:  every STEAM_INTERVAL seconds (every minute by default): lowest price and listings of all cases.
+history: every HISTORY_INTERVAL seconds (hourly by default): sales history of every case -
+         hourly median and number of sales. The first pass backfills years of history.
+         The daily login token renews itself if STEAM_REFRESH_TOKEN is set.
+On HTTP 429 both loops back off until Steam lets go."""
 import asyncio
 import logging
 import time
@@ -27,21 +27,21 @@ async def run(buf: Buffer):
         if config.STEAM_LOGIN_SECURE or config.STEAM_REFRESH_TOKEN:
             tasks.append(run_history(buf, client))
         else:
-            log.info("STEAM_LOGIN_SECURE и STEAM_REFRESH_TOKEN не заданы: история продаж не собирается")
+            log.info("STEAM_LOGIN_SECURE and STEAM_REFRESH_TOKEN are not set: sales history is not collected")
         await asyncio.gather(*tasks)
 
 
 class SteamLogin:
-    """Текущий steamLoginSecure. Продлевается по refresh token за 2 часа до истечения
-    и сразу после отказа Steam. Последний полученный токен хранится в буфере, чтобы
-    перезапуск контейнера не требовал лишнего продления."""
+    """Current steamLoginSecure. Renewed via the refresh token 2 hours before expiry and right
+    after Steam rejects it. The latest token is stored in the buffer so a container restart
+    does not trigger an extra renewal."""
 
     def __init__(self, buf: Buffer, client):
         self.buf, self.client = buf, client
-        # Берём тот из двух токенов (сохранённый в буфере или из .env), что живёт дольше:
-        # так свежий cookie, вписанный в .env руками, не перекрывается старым из буфера.
+        # Use whichever of the two tokens (stored in the buffer or from .env) lives longer,
+        # so a fresh cookie pasted into .env by hand is not overridden by an old one from the buffer.
         candidates = [buf.get_state("login_secure") or "", config.STEAM_LOGIN_SECURE]
-        # Если refresh token от другого аккаунта (его сменили), старые токены не подходят.
+        # If the refresh token belongs to another account (it was replaced), the old tokens do not fit.
         if config.STEAM_REFRESH_TOKEN:
             owner = split_login_cookie(config.STEAM_REFRESH_TOKEN)[0]
             candidates = [c for c in candidates if self._steamid(c) == owner]
@@ -68,15 +68,15 @@ class SteamLogin:
         if config.STEAM_REFRESH_TOKEN and (force_refresh or self.expires_at() < time.time() + 7200):
             self.value = await refresh_login_secure(config.STEAM_REFRESH_TOKEN, config.STEAM_PROXY)
             await asyncio.to_thread(self.buf.set_state, "login_secure", self.value)
-            log.info("токен Steam продлён до %s UTC",
+            log.info("Steam token renewed until %s UTC",
                      time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.expires_at())))
         if not self.value:
-            raise SteamAuthError("нет токена Steam: задайте STEAM_REFRESH_TOKEN или STEAM_LOGIN_SECURE")
+            raise SteamAuthError("no Steam token: set STEAM_REFRESH_TOKEN or STEAM_LOGIN_SECURE")
         return self.value
 
 
 class Contents:
-    """Состав кейсов (для EV): скачивается раз в сутки, при ошибке остаётся прежний."""
+    """Case contents (for EV): downloaded once a day; on error the previous version is kept."""
 
     def __init__(self, client):
         self.client, self.data, self.loaded_at = client, {}, 0.0
@@ -87,17 +87,17 @@ class Contents:
                 crates = (await self.client.get(CRATES_URL)).json()
                 skins = (await self.client.get(SKINS_URL)).json()
                 self.data = await asyncio.to_thread(build_contents, crates, skins)
-                log.info("состав кейсов загружен: %d кейсов", len(self.data))
+                log.info("case contents loaded: %d cases", len(self.data))
             except Exception as e:
-                log.warning("состав кейсов не загрузился: %r", e)
+                log.warning("case contents failed to load: %r", e)
             self.loaded_at = time.time()
         return self.data
 
 
 async def run_items(buf: Buffer, client, login: SteamLogin, contents: Contents, deadline: float):
-    """Цены предметов из кейсов для EV: сколько успеем до следующего прохода истории кейсов.
-    Кейсы идут по очереди (самые ликвидные первыми), чтобы EV появлялся кейс за кейсом.
-    Полный круг по ~10 тыс. предметов занимает около суток, дальше по кругу заново."""
+    """Prices of items inside cases for EV: as many as fit before the next case-history pass.
+    Cases are processed one by one (most liquid first), so EV appears case by case.
+    A full round over ~10k items takes about a day, then it starts over."""
     cases = await asyncio.to_thread(buf.cases_by_liquidity)
     if config.EV_CASES:
         cases = [c for c in cases if c in config.EV_CASES]
@@ -115,28 +115,28 @@ async def run_items(buf: Buffer, client, login: SteamLogin, contents: Contents, 
             try:
                 points = await fetch_price_history(client, name, await login.get())
             except SteamAuthError:
-                # Steam отвечает так же и на несуществующий предмет: продлеваем токен и пробуем один раз.
+                # Steam answers the same way for a non-existent item: renew the token and retry once.
                 points = await fetch_price_history(client, name, await login.get(force_refresh=True))
             fails = 0
         except SteamRateLimited as e:
-            log.warning("%s, прерываю проход предметов", e)
+            log.warning("%s, stopping the items pass", e)
             await asyncio.sleep(300)
             return
         except Exception as e:
             fails += 1
-            log.warning("цены %s: ошибка %r", name, e)
+            log.warning("prices %s: error %r", name, e)
             points = []
-            if fails >= 5:  # пять отказов подряд — скорее всего проблема со входом, а не с предметами
-                log.error("пять ошибок подряд, прерываю проход предметов")
+            if fails >= 5:  # five failures in a row - most likely a login problem, not the items
+                log.error("five errors in a row, stopping the items pass")
                 return
         await asyncio.to_thread(buf.save_item_days, name, daily_points(points))
         done += 1
         await asyncio.sleep(config.HISTORY_PAUSE)
-    log.info("цены предметов из кейсов: обновлено %d", done)
+    log.info("prices of items inside cases: updated %d", done)
 
 
 async def run_history(buf: Buffer, client):
-    await asyncio.sleep(20)  # даём циклу цен первым заполнить список кейсов
+    await asyncio.sleep(20)  # let the price loop fill the case list first
     login = SteamLogin(buf, client)
     contents = Contents(client)
     while True:
@@ -150,25 +150,25 @@ async def run_history(buf: Buffer, client):
                 except SteamAuthError:
                     if not config.STEAM_REFRESH_TOKEN:
                         raise
-                    # Steam мог отозвать токен раньше срока: продлеваем и пробуем ещё раз.
+                    # Steam may have revoked the token early: renew and retry.
                     points = await fetch_price_history(client, name, await login.get(force_refresh=True))
                 n = await asyncio.to_thread(buf.save_sales, name, points)
                 done += 1
-                log.info("история %s: %d точек, новых %d%s", name, len(points), n,
+                log.info("history %s: %d points, %d new%s", name, len(points), n,
                          "" if not points or points[0].median_cents is not None
-                         else " (медиана не в USD — сохранён только объём)")
+                         else " (median not in USD - only volume stored)")
             except SteamAuthError as e:
                 error = str(e)
                 log.error("%s", e)
-                break  # без рабочего токена нет смысла перебирать остальные кейсы
+                break  # without a working token there is no point trying the other cases
             except SteamRateLimited as e:
                 error = str(e)
-                log.warning("%s, прерываю проход истории", e)
+                log.warning("%s, stopping the history pass", e)
                 await asyncio.sleep(300)
                 break
             except Exception as e:
                 error = repr(e)[:300]
-                log.warning("история %s: ошибка %r", name, e)
+                log.warning("history %s: error %r", name, e)
             await asyncio.sleep(config.HISTORY_PAUSE)
         if done:
             await asyncio.to_thread(buf.set_state, "history_ok_at", str(int(time.time())))
@@ -178,7 +178,7 @@ async def run_history(buf: Buffer, client):
             try:
                 await run_items(buf, client, login, contents, started + config.HISTORY_INTERVAL - 60)
             except Exception as e:
-                log.warning("проход цен предметов упал: %r", e)
+                log.warning("items pass crashed: %r", e)
         await asyncio.sleep(max(60, config.HISTORY_INTERVAL - (time.time() - started)))
 
 
@@ -192,22 +192,22 @@ async def run_prices(buf: Buffer, client):
         try:
             ticks, items = await fetch_cases(client, ts)
             if not ticks:
-                raise RuntimeError("Steam вернул пустой список кейсов")
+                raise RuntimeError("Steam returned an empty case list")
             n = await asyncio.to_thread(buf.save, ticks, items)
             await asyncio.to_thread(buf.log_fetch, ts, True, len(ticks))
-            log.info("сохранено %d цен (новых %d)", len(ticks), n)
+            log.info("saved %d prices (%d new)", len(ticks), n)
             backoff = 0
         except SteamRateLimited as e:
             backoff = min(max(backoff * 2, 120), 900)
-            log.warning("%s, пауза %d c", e, backoff)
+            log.warning("%s, pausing %d s", e, backoff)
             await asyncio.to_thread(buf.log_fetch, ts, False, 0, str(e))
-        except Exception as e:  # сеть, 5xx, неожиданный ответ: пропускаем цикл
-            log.warning("ошибка: %r", e)
+        except Exception as e:  # network, 5xx, unexpected response: skip this cycle
+            log.warning("error: %r", e)
             await asyncio.to_thread(buf.log_fetch, ts, False, 0, repr(e)[:500])
         if time.time() - last_prune > 3600:
             removed = await asyncio.to_thread(buf.prune, config.RETENTION_HOURS, config.MAX_DAYS)
             last_prune = time.time()
             if removed:
-                log.info("из буфера удалено %d старых записей", removed)
-        # Следующий запуск — на границе следующего интервала (или после паузы при 429).
+                log.info("pruned %d old rows from the buffer", removed)
+        # Next run on the next interval boundary (or after the pause on 429).
         await asyncio.sleep(backoff or interval - (time.time() % interval))

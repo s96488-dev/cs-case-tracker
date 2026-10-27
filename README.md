@@ -1,217 +1,132 @@
 # CS2 Case Price Tracker
 
-Собирает цены всех оружейных кейсов CS2 со Steam Market раз в минуту, 24/7.
-Сбор идёт в облаке, данные хранятся у тебя на компьютере в PostgreSQL.
-Если компьютер выключен, облако копит данные в буфере и отдаёт их при следующем включении.
+A small data pipeline that records the Steam Community Market price of every CS2 weapon case (~45) once a
+minute, 24/7, pulls years of sales history, and computes a "fundamental" value for each case from the
+prices of the ~10,000 skins, knives and gloves that can drop from it.
+
+Collection runs on a free-tier cloud VM; the data lives in PostgreSQL on a home PC, which serves an
+interactive chart page. The home PC can be off for days: the cloud buffers everything and the home side
+catches up when it comes back.
+
+Russian setup guide with every step: [docs/setup-ru.md](docs/setup-ru.md).
+
+## Architecture
 
 ```
-            каждые 60 c                                  когда ПК включён, раз в минуту
- Steam Market ───────────► Облако (Google Cloud e2-micro) ◄──────────── Домашний ПК (Windows)
- search/render             cloud/ : сборщик + буфер SQLite   HTTPS +   home/ : синхронизатор
- ~5 запросов в минуту      + API выдачи (/api/ticks, /ack)   токен     → PostgreSQL
-                           хранит неотданное до 60 дней                → API графиков :8080
-                                                                       → TradingView
+            every 60 s                                      when the PC is on, once a minute
+ Steam Market ───────────► Cloud (GCP e2-micro, Docker)  ◄──────────── Home PC (Windows)
+ search/render             cloud/: collector               HTTPS +     home/: sync worker
+ pricehistory              + SQLite buffer                 bearer      → PostgreSQL
+                           + pull API behind Caddy         token       → FastAPI + chart page :8080
+                           keeps undelivered rows 60 days              → EV and market index
 ```
 
-## Почему так
+- **cloud/**: an asyncio collector (case prices every minute, hourly sales history per case, item price
+  history case by case), a SQLite buffer and a small FastAPI pull API. Caddy terminates TLS.
+- **home/**: a sync worker that pulls new rows from the cloud into PostgreSQL, an EV calculator, a Valve
+  news fetcher and a FastAPI app serving the chart page and a TradingView UDF datafeed.
+- **common/**: Steam client and parsing, data models, case contents and drop odds, EV math, drop pool data.
 
-**Источник — только Steam.** Используется JSON-эндпоинт поиска маркета
-(`steamcommunity.com/market/search/render/?norender=1`), тот же, который вызывает сама страница маркета.
-Steam отдаёт до 10 предметов за запрос, поэтому все ~45 кейсов — это ~5 запросов с паузой 4 c
-внутри каждой минуты, с минимальной ценой продажи и числом лотов. Логин и прокси не нужны.
+## Key design decisions
 
-Запросы идут через `curl_cffi` с TLS-отпечатком Chrome: обычные Python-клиенты (httpx, requests, urllib)
-Steam узнаёт по TLS-рукопожатию и сразу отвечает `429`, даже с IP, с которого curl проходит.
-При `429` сборщик сохраняет уже полученные страницы и сам увеличивает паузу (2 → 15 минут).
-`priceoverview` (медиана, объём за 24 ч) не используется: это запрос на каждый кейс отдельно, ~45 в минуту
-гарантированно упрутся в лимит.
+- **Steam is the only price source, prices are stored in USD only.** Nothing is ever converted with
+  today's exchange rate: if Steam returns history in another currency, only the sales volume is kept.
+- **One request returns 10 cases.** The collector uses the same JSON search endpoint the market page calls
+  (`market/search/render?norender=1`), so a full snapshot of all cases is ~5 requests a minute, no login.
+- **Browser TLS fingerprint.** Requests go through `curl_cffi` impersonating Chrome. Plain Python clients
+  (httpx, requests, urllib) are recognised by their TLS handshake and get `429` immediately. On `429` the
+  collector keeps the pages it already has and backs off (2 to 15 minutes).
+- **Pull, not push.** The home PC needs no public IP or open ports. Every buffered row has an increasing id;
+  home stores its cursor in PostgreSQL and acknowledges what it saved. Rows and cursor are written in one
+  transaction and inserts are idempotent, so dropped connections, restarts and even a recreated cloud
+  buffer cause neither gaps nor duplicates.
+- **Self-renewing Steam session.** Sales history (`market/pricehistory`) needs a logged-in cookie that
+  lives 24 hours. The collector repeats what the browser does (`jwt/refresh` then `login/settoken`) with
+  the long-lived refresh cookie, 2 hours before expiry.
+- **Deploy via git.** The VM is a clone of this repo; cron runs `deploy/update.sh` every 5 minutes and
+  rebuilds the containers when `main` moves. The home side does `git pull` on start.
 
-**История продаж (настоящий объём).** Поиск маркета не знает, сколько продано, только сколько выставлено.
-Реальные продажи берутся из `market/pricehistory`: медианная цена и число продаж по часам (за последние ~30 дней)
-и по дням (раньше, за все годы существования кейса). Этот эндпоинт требует cookie залогиненного аккаунта
-(`STEAM_LOGIN_SECURE`), опрашивается раз в час по одному запросу на кейс (~40 в час). Первый проход сразу
-догружает всю историю. Все цены хранятся только в USD. pricehistory отдаёт медиану в валюте аккаунта (параметр `currency`
-игнорирует); если это не доллары, медиана отбрасывается, а сохраняется только число продаж — оно от валюты
-не зависит. Пересчитывать прошлые цены по сегодняшнему курсу нельзя: это исказило бы данные.
+## Case EV (expected value of opening)
 
-**Облако → дом по модели «дом сам забирает».** Домашнему ПК не нужен белый IP и открытые порты.
-Каждая запись в буфере имеет возрастающий id, дом хранит курсор в своей базе и подтверждает (`ack`)
-сохранённое. Данные и курсор пишутся в одной транзакции, вставка идемпотентна, поэтому обрывы связи,
-перезапуски и даже пересоздание облачного буфера не дают ни потерь, ни дублей.
+EV is the sum of *item price × drop probability* over every market listing that can drop from the case:
+each skin in each wear, StatTrak, knives and gloves.
 
-**Модель данных.** Таблица `items` (предмет) + `price_ticks` (снимок цены). У кейсов нет своих параметров,
-у скинов они будут лежать в `items.attributes` (JSONB), таблица цен не меняется. Поле `source` оставлено,
-чтобы в будущем можно было различать, например, разные валюты Steam.
+- **Contents** come from the open [ByMykel/CSGO-API](https://github.com/ByMykel/CSGO-API) dataset (built
+  from Valve game files, it includes each case's knives and gloves). Prices come only from Steam.
+- **Odds**: official rarity odds (Mil-Spec 79.92%, Restricted 15.98%, Classified 3.2%, Covert 0.64%,
+  knife/gloves 0.26%), StatTrak 10%, wear from the community float model mapped into each skin's float
+  range (`common/case_contents.py`).
+- **Item price on a day**: Steam exposes only an hourly/daily median and volume, not single trades, so the
+  price is the volume-weighted median of the most recent days until at least 10 sales are covered
+  (`common/ev.py`).
+- A case is shown once prices cover at least 80% of its drop probability.
 
-## Что лежит в репозитории
+## Chart page
 
-| Путь | Что это |
-|---|---|
-| `common/steam.py` | запрос к Steam и разбор ответа, фильтр «только кейсы» |
-| `common/models.py` | `Item` / `Case` / `PriceTick` |
-| `cloud/` | облачный сервис: сборщик, буфер, API выдачи |
-| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | запуск в облаке с HTTPS |
-| `home/schema.sql` | схема PostgreSQL (создаётся автоматически) |
-| `home/sync.py` | синхронизатор облако → PostgreSQL |
-| `home/api.py` | API для графиков и UDF-датафид TradingView |
-| `home/static/index.html` | временная страница с графиком (Lightweight Charts), пока нет React |
-| `start-home.bat` | запуск домашней части на Windows |
-| `install-autostart.bat` / `uninstall-autostart.bat` | включить / отключить автозапуск домашней части при входе в Windows |
+- Candles of the lowest sell price (1m to 1D), the median of real sales and units sold.
+- EV line with optional SMA/EMA smoothing, minus key price and minus the Steam fee.
+- Lower panel: *price / EV* (or *(case + key) / EV*), or *case / market index*. It pans, zooms and shows
+  the crosshair together with the main chart.
+- **Market index**: all cases equally weighted, chain-linked daily from mean log returns, starting at 100.
+- **Drop pool line**: when a regular case left the active drop pool, or a forecast for cases still in it
+  (release date + the average lifetime of past regular cases, ~1050 days; `common/drop_pool.py`).
+- Valve news mentioning the case, as markers and a side panel.
+- Scale modes: auto, log, percent from the first visible bar, EV on its own scale. A TradingView-style
+  legend with values under the crosshair and an eye to hide each series. Settings persist in the browser.
 
-## Обновления через git
+## Running it
 
-Облачная машина — клон этого репозитория. Cron раз в 5 минут запускает `deploy/update.sh`: если в `main`
-появились новые коммиты, он делает `git reset --hard origin/main` и `docker compose up -d --build`.
-`.env` и `data/` в git не входят и не трогаются. Лог обновлений: `update.log` в папке репозитория.
-Дома `start-home.bat` при каждом запуске делает `git pull` и доустанавливает зависимости.
+**Cloud** (Debian VM with Docker):
 
-Одноразовая настройка машины (репозиторий приватный, поэтому нужен ключ только на чтение — deploy key):
 ```bash
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub
-# GitHub → репозиторий → Settings → Deploy keys → Add deploy key → вставить ключ (без write access)
-sudo apt-get install -y git
-cd ~/cs-case-tracker            # или git clone git@github.com:<owner>/cs-case-tracker.git на новой машине
-git init -q -b main 2>/dev/null; git remote add origin git@github.com:<owner>/cs-case-tracker.git
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-git fetch origin main && git reset --hard origin/main
-sh deploy/setup-vm.sh
+cp .env.example .env            # set API_TOKEN, DOMAIN and optionally the Steam refresh cookie
+docker compose up -d --build
+curl https://<DOMAIN>/health     # last_success_at updates every minute
 ```
 
-## 1. Облако: Google Cloud e2-micro (бесплатный тариф)
+`sh deploy/setup-vm.sh` installs the auto-update cron, `sh deploy/set-steam-token.sh` stores the Steam
+cookie (read with hidden input) and checks that renewal works.
 
-1. Зайди в [console.cloud.google.com](https://console.cloud.google.com), создай проект и привяжи платёжный
-   аккаунт (без него нельзя даже бесплатный тариф). Сразу заведи **Billing → Budgets & alerts** на $1,
-   чтобы узнать о любом списании.
-2. **Compute Engine → VM instances → Create instance**:
-   - регион `us-central1`, `us-west1` или `us-east1` (бесплатно только в них);
-   - тип машины **e2-micro**;
-   - диск: Debian 12, тип **Standard persistent disk**, до 30 ГБ (balanced/SSD уже платные);
-   - Firewall: отметь **Allow HTTP** и **Allow HTTPS**.
-   Проверь в калькуляторе при создании, что внешний IP не добавляет стоимость в твоём регионе.
-3. Нажми **SSH** у машины (откроется терминал в браузере) и поставь Docker:
-   ```bash
-   curl -fsSL https://get.docker.com | sudo sh
-   ```
-4. Залей код: кнопкой **Upload file** в окне SSH загрузи `cs-case-tracker.zip`, затем
-   `sudo apt-get install -y unzip && unzip cs-case-tracker.zip && cd cs-case-tracker`
-   (или `git clone`, когда код будет в репозитории).
-5. Создай `.env` по образцу `.env.example`:
-   ```bash
-   cp .env.example .env
-   python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # это API_TOKEN
-   nano .env    # впиши API_TOKEN и DOMAIN = внешний IP через дефисы + .sslip.io
-   ```
-6. Запусти: `sudo docker compose up -d --build`. Сервисы перезапускаются сами после перезагрузки VM.
-7. (Для истории продаж) добавь токен Steam, см. раздел «Токен Steam» ниже.
-8. Проверь: `curl https://<DOMAIN>/health` → `last_success_at` должен обновляться каждую минуту.
-   Логи: `sudo docker compose logs -f collector`.
+**Home** (Windows, PostgreSQL 16+, Python 3.11+): copy `home\.env.example.bat` to `home\env.bat`, fill in
+the postgres password, cloud URL and token, run `start-home.bat`, open <http://127.0.0.1:8080>.
+`install-autostart.bat` starts it hidden on every login and restarts it if it crashes. The database and
+tables are created automatically.
 
-## Токен Steam (для истории продаж)
+## API
 
-`steamLoginSecure` (короткий токен) Steam выдаёт ровно на сутки, а браузер тихо продлевает его через
-долгоживущий cookie `steamRefresh_steam`. Сборщик делает так же: ему нужен этот второй cookie, и за 2 часа
-до истечения он сам проходит путь браузера `login.steampowered.com/jwt/refresh` → `steamcommunity.com/login/settoken`
-и получает свежий `steamLoginSecure`.
+Home (port 8080):
 
-1. В Chrome войди в Steam. F12 → вкладка **Network** → галочка **Keep log** (Preserve log).
-2. В этой вкладке открой <https://login.steampowered.com/> (Steam перекинет на магазин, это нормально).
-   В фильтре впиши `login.steampowered`, выбери первый запрос → **Cookies** → **Request Cookies** →
-   `steamRefresh_steam` → скопируй Value.
-3. На облачной машине: `cd ~/cs-case-tracker && sh deploy/set-steam-token.sh`, вставь значение, Enter.
-   Скрипт покажет, до какого числа действует refresh token, перезапустит сборщик и сразу проверит продление
-   (`ПРОДЛЕНИЕ РАБОТАЕТ` / `НЕ РАБОТАЕТ`). Проверить ещё раз в любой момент:
-   `docker compose exec -T collector python -m cloud.check_token`.
-4. Через минуту в логах появятся `токен Steam продлён до ...` и `история ...: N точек`.
-   Состояние видно в `/api/stats`: `history_last_ok_at`, `history_last_error`, `login_expires_at`.
-
-Важно:
-- Refresh token даёт доступ к аккаунту (кроме действий под Steam Guard) на долгий срок. Держи `.env`
-  в секрете; если есть второй аккаунт без ценного инвентаря, лучше брать токен с него.
-- «Выйти» в Steam в этом браузере отзывает токен. Тогда в логах будет `refresh token устарел или отозван`:
-  повтори шаги 1–3.
-- Если токен перестал работать, данные не пропадут: Steam хранит почасовую историю примерно за 30 дней,
-  и после нового токена сборщик её догрузит.
-- Без refresh token можно вписать в `.env` просто `STEAM_LOGIN_SECURE=...`, но он проработает только сутки.
-- Цены в истории Steam отдаёт в валюте кошелька аккаунта. Храним только USD, поэтому для прошлых цен нужен
-  аккаунт с долларовым кошельком: `check_token` пишет `ИСТОРИЯ ЦЕН В USD: да/нет`. Если сменить токен на такой
-  аккаунт, сборщик заново отдаст дому всю историю, и к уже сохранённым объёмам добавятся цены.
-
-## 2. Дом: PostgreSQL + синхронизатор (Windows)
-
-1. Поставь [PostgreSQL](https://www.postgresql.org/download/windows/) (16 или новее) и Python 3.11+.
-   Базу создавать не нужно: синхронизатор создаст `cs_prices` и таблицы сам.
-2. Скопируй `home\.env.example.bat` в `home\env.bat` и впиши пароль postgres, адрес облака и тот же токен.
-3. Запусти `start-home.bat`. Первый запуск создаст виртуальное окружение и поставит зависимости.
-4. Открой <http://127.0.0.1:8080> — список кейсов и свечной график.
-5. Автозапуск: закрой окно `start-home.bat`, если оно открыто, и запусти `install-autostart.bat`.
-   Домашняя часть стартует сразу и потом при каждом входе в Windows, без окна, а если упадёт,
-   перезапустится через 30 секунд. После включения ПК она догонит всё, что накопилось в облаке.
-   Лог пишется в `home.log`. Отключить автозапуск: `uninstall-autostart.bat`.
-
-Справа на странице графика — официальные новости Valve по выбранному кейсу (флажки «N» на графике).
-Они грузятся из Steam сами: все прошлые при первом запуске, потом раз в час.
-
-## Фундаментальная цена кейса (EV)
-
-EV — ожидаемая стоимость открытия: сумма «цена предмета × шанс выпадения» по всем позициям маркета, которые
-могут выпасть из кейса (каждый скин в каждом износе, StatTrak, ножи и перчатки).
-- Состав кейсов — открытый набор [ByMykel/CSGO-API](https://github.com/ByMykel/CSGO-API) (собран из файлов
-  игры Valve, в нём есть ножи и перчатки каждого кейса). Цены — только Steam.
-- Шансы редкостей официальные (Mil-Spec 79,92%, Restricted 15,98%, Classified 3,2%, Covert 0,64%,
-  нож/перчатки 0,26%), StatTrak 10%, износ по модели выпадения float (см. `common/case_contents.py`).
-- Цена предмета на день — медиана последних дней с продажами, пока не наберётся не меньше 10 продаж
-  (`common/ev.py`): Steam не отдаёт отдельные сделки, только медиану и объём за час/день.
-- Облако между проходами истории кейсов запрашивает историю цен предметов (`EV_CASES` — для каких кейсов,
-  пусто — для всех). Кейсы идут по очереди, самые ликвидные (больше лотов) первыми: один кейс за полчаса–час,
-  полный круг по ~10 тыс. позиций около суток. Дом пересчитывает EV раз в час и показывает кейс, когда
-  цены собраны хотя бы на 80% вероятности.
-- На графике: голубая линия EV, нижняя панель «цена / EV» (выше 1 — кейс дороже того, что из него в среднем
-  выпадает). Покрытие — доля вероятности предметов, у которых есть цена.
-- Панель над графиком: сглаживание EV (SMA/EMA, период в днях), вычет цены ключа и комиссии Steam
-  (тогда нижняя панель — «(кейс + ключ) / EV», ниже 1 — открывать выгодно), шкала: автомасштаб, логарифм,
-  проценты от первого видимого бара, EV на своей шкале слева. Настройки запоминаются в браузере.
-- Индекс рынка (`/api/market`): все кейсы с равными весами, цепной по дням, старт 100. Зелёная линия на
-  графике; нижнюю панель можно переключить на «кейс / рынок» — растёт, когда кейс сильнее рынка.
-- Легенда слева сверху: значения под перекрестием и глаз, чтобы скрыть или показать каждую линию.
-  Нижняя панель двигается, масштабируется и показывает перекрестие вместе с верхней.
-
-## Активный дроп и прогноз ухода
-
-`common/drop_pool.py` — даты выхода обычных кейсов и даты, когда они ушли из активного дропа (история пула
-на skinory.io). Средний срок жизни в активном дропе считается по прошлым обычным кейсам (без операционных,
-eSports, Winter Offensive, CS20, первых трёх Weapon Case и кейсов Armory). На графике кейса, который ещё в
-активном дропе, красная вертикальная линия — дата выхода + средний срок; у ушедших — серая линия с датой ухода.
-Когда Valve переводит кейс в редкий дроп, дату надо дописать в этот файл.
-
-## API (домашний, порт 8080)
-
-| Запрос | Ответ |
+| Request | Response |
 |---|---|
-| `GET /api/items` | все кейсы: последняя цена, лоты, цена 24 ч назад |
-| `GET /api/ev?item_id=7` | EV кейса по дням: `ev` в долларах, `coverage` — доля вероятности с известной ценой |
-| `GET /api/market` | индекс рынка кейсов по дням: `value` (старт 100), `cases` — сколько кейсов в этот день |
-| `GET /api/drop?item_id=7` | активный дроп: `released`, `left_active` (дата ухода) или `forecast` (прогноз), `mean_days` |
-| `GET /api/news?item_id=7` | официальные новости Valve, где упомянут кейс (без `item_id` — все); новые сверху |
-| `GET /api/candles?item_id=7&tf=60` | OHLC-свечи минимальной цены; `tf`: `1`, `5`, `15`, `60`, `240` (минуты) или `1D`; `volume` — продажи (от 1ч), `listings` — лоты на продаже |
-| `GET /api/sales?item_id=7&tf=1D` | история продаж: медиана и сколько продано (от 1ч, за все годы) |
-| `GET /api/status` | сколько снимков в базе и время последнего |
-| `GET /udf/config`, `/udf/symbols`, `/udf/search`, `/udf/history`, `/udf/time` | датафид для TradingView Charting Library |
+| `GET /api/items` | all cases: latest price, listings, price 24 h ago |
+| `GET /api/candles?item_id=7&tf=60` | OHLC of the lowest price; `tf`: `1`, `5`, `15`, `60`, `240` minutes or `1D` |
+| `GET /api/sales?item_id=7&tf=1D` | sales history: median and units sold |
+| `GET /api/ev?item_id=7` | daily EV in USD and `coverage` (priced share of probability) |
+| `GET /api/market` | daily market index (`value`, starts at 100) and number of cases |
+| `GET /api/drop?item_id=7` | `released`, `left_active` or `forecast`, `mean_days` |
+| `GET /api/news?item_id=7` | Valve news mentioning the case, newest first |
+| `GET /api/status` | number of snapshots and the latest one |
+| `GET /udf/*` | TradingView Charting Library datafeed |
 
-Свечи строятся из минутных снимков минимальной цены продажи. Оранжевая линия — медиана реальных продаж,
-столбики — сколько штук продано (из истории продаж, поэтому только на таймфреймах от 1ч).
+Cloud (all but `/health` need `Authorization: Bearer <API_TOKEN>`): `GET /health`, `GET /api/stats`,
+`GET /api/ticks?after_id=N`, `GET /api/sales?after_id=N`, `GET /api/item_days?after_id=N`,
+`POST /api/ack`.
 
-Для TradingView два варианта:
-- **Lightweight Charts** (открытая библиотека, уже используется на временной странице) — берёт `/api/candles`.
-- **Charting Library** (полный интерфейс TradingView с индикаторами) — бесплатно, но доступ выдают
-  по заявке на сайте TradingView; подключается к `/udf` через их `UDFCompatibleDatafeed`.
+## Repository layout
 
-## Облачный API (для синхронизатора)
+| Path | What it is |
+|---|---|
+| `common/steam.py` | Steam requests, parsing, session renewal |
+| `common/case_contents.py` | case contents and drop odds per market listing |
+| `common/ev.py` | daily item prices and EV |
+| `common/drop_pool.py` | active drop pool history and forecast |
+| `cloud/` | collector, SQLite buffer, pull API |
+| `home/` | sync worker, PostgreSQL schema, EV job, news, chart API and page |
+| `deploy/` | VM setup, auto-update, Steam cookie setup |
+| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | cloud runtime with HTTPS |
+| `*.bat` | Windows start and autostart scripts |
 
-`GET /health` (без токена), `GET /api/stats`, `GET /api/ticks?after_id=N`, `GET /api/sales?after_id=N`,
-`POST /api/ack {"up_to_id": N, "sales_up_to_id": M}`
-— все, кроме `/health`, с заголовком `Authorization: Bearer <API_TOKEN>`.
+## Stack
 
-## Что дальше
-
-- React-фронт на Lightweight Charts или Charting Library поверх `/api` и `/udf`.
-- Скины: наследник `Item` с параметрами в `attributes` и отдельный запрос поиска.
+Python 3.11+, asyncio, FastAPI, curl_cffi, SQLite, PostgreSQL (psycopg 3), Docker Compose, Caddy,
+Google Cloud, Lightweight Charts.
