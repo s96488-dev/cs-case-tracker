@@ -1,16 +1,16 @@
-"""Состав кейсов и шансы выпадения каждой позиции маркета Steam (с износом и StatTrak).
+"""Case contents and drop odds of every Steam Market listing (with wear and StatTrak).
 
-Источник состава — открытый набор ByMykel/CSGO-API (собран из файлов игры Valve, в нём есть и ножи с
-перчатками каждого кейса, которых нет в публичных файлах игры). Цены отсюда не берутся, только состав.
+Contents come from the open ByMykel/CSGO-API dataset (built from Valve game files; it includes the knives
+and gloves of each case, which are missing from the public game files). Only contents, never prices.
 
-Шансы:
-- редкость — официальные шансы Valve: Mil-Spec 79,92%, Restricted 15,98%, Classified 3,2%,
-  Covert 0,64%, нож/перчатки 0,26%; внутри редкости все предметы равновероятны;
-- StatTrak — 10% (у ножей тоже, у перчаток StatTrak не бывает);
-- износ — модель выпадения float, выведенная сообществом по миллионам открытий: сначала выбирается
-  значение 0…1 с весами по участкам (0–0,07: 3%, 0,07–0,15: 24%, 0,15–0,38: 33%, 0,38–0,45: 24%,
-  0,45–1: 16%, внутри участка равномерно), потом оно переносится в диапазон скина [min_float, max_float].
-  Это приближение, официальной формулы Valve не публикует.
+Odds:
+- rarity - Valve's official odds: Mil-Spec 79.92%, Restricted 15.98%, Classified 3.2%,
+  Covert 0.64%, knife/gloves 0.26%; all items within a rarity are equally likely;
+- StatTrak - 10% (knives too; gloves never have StatTrak);
+- wear - the float drop model inferred by the community from millions of openings: first a value
+  0..1 is drawn with segment weights (0-0.07: 3%, 0.07-0.15: 24%, 0.15-0.38: 33%, 0.38-0.45: 24%,
+  0.45-1: 16%, uniform within a segment), then it is mapped into the skin range [min_float, max_float].
+  This is an approximation; Valve does not publish the formula.
 """
 from collections import defaultdict
 
@@ -22,7 +22,7 @@ RARITY_ODDS = {
     "rarity_mythical_weapon": 0.1598,   # Restricted
     "rarity_legendary_weapon": 0.0320,  # Classified
     "rarity_ancient_weapon": 0.0064,    # Covert
-    "rare_special": 0.0026,             # ножи и перчатки
+    "rare_special": 0.0026,             # knives and gloves
 }
 STATTRAK_ODDS = 0.10
 WEARS = [("Factory New", 0.0, 0.07), ("Minimal Wear", 0.07, 0.15), ("Field-Tested", 0.15, 0.38),
@@ -38,7 +38,7 @@ def wear_odds(min_float: float, max_float: float) -> dict[str, float]:
         return {}
     out: dict[str, float] = {}
     for a, b, weight in FLOAT_WEIGHTS:
-        lo, hi = min_float + a * span, min_float + b * span  # участок после переноса в диапазон скина
+        lo, hi = min_float + a * span, min_float + b * span  # segment mapped into the skin range
         for name, wlo, whi in WEARS:
             part = max(0.0, min(hi, whi) - max(lo, wlo)) / (hi - lo)
             if part > 0:
@@ -47,7 +47,7 @@ def wear_odds(min_float: float, max_float: float) -> dict[str, float]:
 
 
 def _variants(skin: dict | None, base_name: str, stattrak_ok: bool) -> dict[str, float]:
-    """Позиции маркета одного предмета и их доли (сумма 1)."""
+    """Market listings of one item and their shares (summing to 1)."""
     st = STATTRAK_ODDS if stattrak_ok else 0.0
     wears = wear_odds(skin["min_float"], skin["max_float"]) if skin and skin.get("min_float") is not None \
         and skin.get("max_float") is not None and "|" in base_name else {}
@@ -56,7 +56,7 @@ def _variants(skin: dict | None, base_name: str, stattrak_ok: bool) -> dict[str,
         if p <= 0:
             continue
         name = base_name.replace("★ ", "★ " + prefix) if base_name.startswith("★ ") else prefix + base_name
-        if not wears:  # ванильный нож без раскраски: износа у него нет
+        if not wears:  # vanilla knife without a finish has no wear
             out[name] = out.get(name, 0) + p
         for w, q in wears.items():
             out[f"{name} ({w})"] = out.get(f"{name} ({w})", 0) + p * q
@@ -64,10 +64,10 @@ def _variants(skin: dict | None, base_name: str, stattrak_ok: bool) -> dict[str,
 
 
 def build(crates: list[dict], skins: list[dict]) -> dict[str, dict[str, float]]:
-    """{название кейса: {market_hash_name: шанс выпадения}}. Сумма шансов по кейсу — 1."""
+    """{case name: {market_hash_name: drop probability}}. Probabilities of each case sum to 1."""
     by_name = {}
     for s in skins:
-        by_name.setdefault(s["name"], s)  # фазы Doppler — один скин маркета
+        by_name.setdefault(s["name"], s)  # Doppler phases are one market listing
     result = {}
     for c in crates:
         if c.get("type") != "Case" or not c.get("contains"):

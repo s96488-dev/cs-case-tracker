@@ -19,7 +19,7 @@ def open_pool():
 
 
 def ensure_database():
-    """Создаёт базу из DATABASE_URL, если её ещё нет (подключаясь к служебной базе postgres)."""
+    """Creates the DATABASE_URL database if it does not exist (connecting to the postgres maintenance db)."""
     info = psycopg.conninfo.conninfo_to_dict(config.DATABASE_URL)
     name = info.get("dbname")
     try:

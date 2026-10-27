@@ -2,25 +2,25 @@ import os
 from pathlib import Path
 
 BUFFER_PATH = Path(os.getenv("BUFFER_PATH", "data/buffer.db"))
-# Токен, по которому домашний компьютер забирает данные. Обязателен.
+# Token the home machine uses to pull data. Required.
 API_TOKEN = os.getenv("API_TOKEN", "")
 STEAM_INTERVAL = int(os.getenv("STEAM_INTERVAL", "60"))
-# Подтверждённые домом записи держим ещё столько часов, на всякий случай.
+# Rows acknowledged by home are kept this many more hours, just in case.
 RETENTION_HOURS = int(os.getenv("RETENTION_HOURS", "72"))
-# Если дом не забирал данные дольше, самые старые записи удаляются после стольких дней.
+# If home has not pulled data for longer than this, the oldest rows are dropped after this many days.
 MAX_DAYS = int(os.getenv("MAX_DAYS", "60"))
 STEAM_PROXY = os.getenv("STEAM_PROXY") or None
-# Cookie steamLoginSecure залогиненного аккаунта Steam: нужен для истории продаж (pricehistory).
-# Пусто — история продаж не собирается, остальное работает.
+# steamLoginSecure cookie of a logged-in Steam account: needed for sales history (pricehistory).
+# Empty - sales history is not collected, everything else works.
 STEAM_LOGIN_SECURE = os.getenv("STEAM_LOGIN_SECURE", "").strip()
-# Cookie steamRefresh_steam (домен login.steampowered.com): живёт долго, по нему сборщик сам
-# продлевает суточный steamLoginSecure. Если задан, STEAM_LOGIN_SECURE можно не указывать.
+# steamRefresh_steam cookie (domain login.steampowered.com): long-lived; the collector uses it to
+# renew the daily steamLoginSecure. If set, STEAM_LOGIN_SECURE can be left empty.
 STEAM_REFRESH_TOKEN = os.getenv("STEAM_REFRESH_TOKEN", "").strip()
-# Как часто обновлять историю продаж (секунды) и пауза между кейсами внутри одного прохода.
+# How often to refresh sales history (seconds) and the pause between cases within one pass.
 HISTORY_INTERVAL = int(os.getenv("HISTORY_INTERVAL", "3600"))
 HISTORY_PAUSE = float(os.getenv("HISTORY_PAUSE", "6"))
-# Цены всех скинов, ножей и перчаток из кейсов (для EV) в промежутках между проходами истории кейсов.
+# Prices of all skins, knives and gloves inside cases (for EV), fetched between case-history passes.
 ITEM_PRICES = os.getenv("ITEM_PRICES", "1") == "1"
-# Для каких кейсов собирать цены содержимого (через запятую); пусто — для всех. Кейсы идут по очереди,
-# самые ликвидные первыми: один кейс (~250 предметов) собирается примерно за полчаса–час.
+# Cases to collect contents prices for (comma-separated); empty - all. Cases are processed one by one,
+# most liquid first: one case (~250 items) takes roughly 30-60 minutes.
 EV_CASES = [c.strip() for c in os.getenv("EV_CASES", "").split(",") if c.strip()]

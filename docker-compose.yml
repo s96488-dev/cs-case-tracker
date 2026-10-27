@@ -1,5 +1,5 @@
-# Облако: сборщик + Caddy (HTTPS с автоматическим сертификатом Let's Encrypt).
-# Перед запуском создайте файл .env рядом (см. .env.example).
+# Cloud: collector + Caddy (HTTPS with an automatic Let's Encrypt certificate).
+# Create a .env file next to it before starting (see .env.example).
 services:
   collector:
     build: .

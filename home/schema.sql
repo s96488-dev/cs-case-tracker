@@ -1,10 +1,10 @@
--- Схема домашней базы PostgreSQL. Применяется автоматически при запуске синхронизатора.
+-- Home PostgreSQL schema. Applied automatically when the home service starts.
 CREATE TABLE IF NOT EXISTS items (
     id               SERIAL PRIMARY KEY,
     market_hash_name TEXT NOT NULL UNIQUE,
     item_type        TEXT NOT NULL,              -- case | skin | ...
     icon_url         TEXT,
-    attributes       JSONB NOT NULL DEFAULT '{}', -- параметры скинов (износ, float, StatTrak...) в будущем
+    attributes       JSONB NOT NULL DEFAULT '{}', -- skin parameters (wear, float, StatTrak...) in the future
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS price_ticks (
     PRIMARY KEY (item_id, source, ts)
 );
 
--- История продаж Steam (pricehistory): число продаж за час (раньше ~30 дней — за день) и медианная
--- цена в центах USD. median_cents пустой, если Steam отдал историю не в долларах (валюта аккаунта).
+-- Steam sales history (pricehistory): units sold per hour (older than ~30 days: per day) and the median
+-- price in USD cents. median_cents is empty if Steam returned the history in another currency.
 CREATE TABLE IF NOT EXISTS sales_history (
     item_id      INTEGER     NOT NULL REFERENCES items(id),
     source       TEXT        NOT NULL DEFAULT 'steam',
@@ -30,16 +30,16 @@ CREATE TABLE IF NOT EXISTS sales_history (
     PRIMARY KEY (item_id, source, ts)
 );
 ALTER TABLE sales_history ALTER COLUMN median_cents DROP NOT NULL;
--- Длина периода точки: 3600 (час) или 86400 (день). Старше ~30 дней Steam хранит только дневные точки.
+-- Point period length: 3600 (hour) or 86400 (day). Steam keeps only daily points older than ~30 days.
 ALTER TABLE sales_history ADD COLUMN IF NOT EXISTS span_secs INTEGER NOT NULL DEFAULT 3600;
 
--- Курсоры синхронизации: id последних записей облачного буфера (цены и продажи), сохранённых здесь.
+-- Sync cursors: ids of the latest cloud buffer rows (prices and sales) stored here.
 CREATE TABLE IF NOT EXISTS sync_state (
     key   TEXT PRIMARY KEY,
     value BIGINT NOT NULL
 );
 
--- Официальные новости Valve по CS (Steam News API, лента steam_community_announcements).
+-- Official Valve CS news (Steam News API, steam_community_announcements feed).
 CREATE TABLE IF NOT EXISTS news (
     gid      TEXT PRIMARY KEY,
     ts       TIMESTAMPTZ NOT NULL,
@@ -48,14 +48,14 @@ CREATE TABLE IF NOT EXISTS news (
     contents TEXT NOT NULL
 );
 
--- Какие кейсы упомянуты в новости (по точному названию кейса в заголовке или тексте).
+-- Cases mentioned in a news item (exact case name in the title or text).
 CREATE TABLE IF NOT EXISTS item_news (
     item_id INTEGER NOT NULL REFERENCES items(id),
     gid     TEXT    NOT NULL REFERENCES news(gid),
     PRIMARY KEY (item_id, gid)
 );
 
--- Дневные цены предметов, которые выпадают из кейсов (скины, ножи, перчатки): медиана и объём продаж за день.
+-- Daily prices of items that drop from cases (skins, knives, gloves): median and volume per day.
 CREATE TABLE IF NOT EXISTS item_days (
     market_hash_name TEXT    NOT NULL,
     day              DATE    NOT NULL,
@@ -64,8 +64,8 @@ CREATE TABLE IF NOT EXISTS item_days (
     PRIMARY KEY (market_hash_name, day)
 );
 
--- EV кейса по дням: сумма «цена предмета по последним 10 продажам × шанс выпадения».
--- coverage — доля вероятности предметов, у которых на этот день есть цена (1.0 — посчитано всё).
+-- Case EV per day: sum of "item price over the last 10 sales x drop probability".
+-- coverage - probability share of items that have a price on that day (1.0 - fully computed).
 CREATE TABLE IF NOT EXISTS case_ev (
     item_id  INTEGER NOT NULL REFERENCES items(id),
     day      DATE    NOT NULL,

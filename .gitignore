@@ -4,5 +4,5 @@ home/env.bat
 .venv/
 __pycache__/
 home.log
-# Лог cron автообновления (в data/ писать нельзя: её создаёт Docker от root).
+# Auto-update cron log (cannot live in data/: Docker creates it as root).
 update.log

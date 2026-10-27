@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CS2 кейсы — цены Steam</title>
-<!-- Временная страница для проверки данных. Полноценный фронт будет на React. -->
+<title>CS2 Case Tracker</title>
+<!-- Lightweight chart page served by the home backend. -->
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --text:#e6e6e6; --muted:#8a8f98; --up:#26a69a; --down:#ef5350; --line:#252a33; }
   * { box-sizing:border-box; }
@@ -30,7 +30,7 @@
   #tools input[type=number] { width:58px; }
   #tools button { padding:3px 8px; font-size:12px; }
   #chart { flex:1; position:relative; }
-  /* Легенда как в TradingView: название, значение под перекрестием, глаз — скрыть/показать. */
+  /* TradingView-style legend: name, value under the crosshair, eye to hide/show. */
   .legend { position:absolute; left:8px; top:6px; z-index:3; display:flex; flex-direction:column; gap:2px; font-size:12px; }
   .legend .it { display:flex; gap:6px; align-items:center; padding:1px 4px; border-radius:3px; background:rgba(15,17,21,0.6); width:max-content; }
   .legend .it:hover { background:#1f2430; }
@@ -48,7 +48,7 @@
   #news.collapsed { width:32px; overflow:hidden; cursor:pointer; }
   #news.collapsed h2 { border:0; padding:8px 4px; flex-direction:column; }
   #news.collapsed h2 span { display:none; }
-  #news.collapsed h2::after { content:"Новости"; writing-mode:vertical-rl; color:var(--muted); font-weight:normal; }
+  #news.collapsed h2::after { content:"News"; writing-mode:vertical-rl; color:var(--muted); font-weight:normal; }
   #news.collapsed #newsList { display:none; }
   #news .item { padding:10px 12px; border-bottom:1px solid var(--line); }
   #news .date { color:var(--muted); font-size:12px; }
@@ -62,30 +62,30 @@
 <body>
 <aside id="list"></aside>
 <main>
-  <header><h1 id="title">Выберите кейс</h1><span id="hint"></span><div id="tfs"></div></header>
+  <header><h1 id="title">Select a case</h1><span id="hint"></span><div id="tfs"></div></header>
   <div id="tools">
-    <span class="grp">EV: сглаживание
-      <select id="smType"><option value="">нет</option><option value="sma">SMA</option><option value="ema">EMA</option></select>
-      <input id="smLen" type="number" min="2" max="365" value="7" title="Период в днях"></span>
-    <label title="Открытие стоит кейс + ключ: вычитаем цену ключа из EV"><input id="keyOn" type="checkbox">минус ключ $<input id="keyPrice" type="number" min="0" step="0.01" value="2.49"></label>
-    <label title="При продаже скина Steam и игра забирают ~13%: продавец получает цену / 1.15"><input id="feeOn" type="checkbox">минус комиссия Steam</label>
-    <span class="grp">Шкала
-      <button id="scAuto" title="Автомасштаб по видимым данным (как кнопка A в TradingView)">Авто</button>
-      <button id="scLog" title="Логарифмическая шкала">Лог</button>
-      <button id="scPct" title="Проценты от первого видимого бара: цена и EV стартуют из одной точки">%</button>
-      <button id="scSep" title="EV на своей шкале слева: обе линии растягиваются на всю высоту">EV слева</button>
-      <button id="scFit" title="Показать всю историю">Вся история</button></span>
-    <span class="grp">Нижняя панель
-      <select id="lowSel"><option value="ev">Цена / EV</option><option value="mkt">Кейс / рынок</option></select></span>
+    <span class="grp">EV smoothing
+      <select id="smType"><option value="">none</option><option value="sma">SMA</option><option value="ema">EMA</option></select>
+      <input id="smLen" type="number" min="2" max="365" value="7" title="Period in days"></span>
+    <label title="Opening costs case + key: subtract the key price from EV"><input id="keyOn" type="checkbox">minus key $<input id="keyPrice" type="number" min="0" step="0.01" value="2.49"></label>
+    <label title="Steam and the game take ~13% of a sale: the seller receives price / 1.15"><input id="feeOn" type="checkbox">minus Steam fee</label>
+    <span class="grp">Scale
+      <button id="scAuto" title="Auto-scale to visible data (like the A button in TradingView)">Auto</button>
+      <button id="scLog" title="Logarithmic scale">Log</button>
+      <button id="scPct" title="Percent from the first visible bar: price and EV start from the same point">%</button>
+      <button id="scSep" title="EV on its own left scale: both lines use the full height">EV left</button>
+      <button id="scFit" title="Show the full history">Full history</button></span>
+    <span class="grp">Lower panel
+      <select id="lowSel"><option value="ev">Price / EV</option><option value="mkt">Case / market</option></select></span>
   </div>
   <div id="chart"></div>
   <div id="ratioBox"><div id="ratioLabel"></div><div id="ratio"></div></div>
   <div id="status"></div>
 </main>
-<section id="news"><h2><span>Новости Valve по кейсу</span><button id="newsToggle" title="Свернуть / развернуть">»</button></h2><div id="newsList"></div></section>
+<section id="news"><h2><span>Valve news for this case</span><button id="newsToggle" title="Collapse / expand">»</button></h2><div id="newsList"></div></section>
 <script src="lightweight-charts.standalone.production.js"></script>
 <script>
-const TFS = { "1м": "1", "5м": "5", "15м": "15", "1ч": "60", "4ч": "240", "1Д": "1D" };
+const TFS = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "1D" };
 let current = null, tf = "60";
 const HOURLY = ["60", "240", "1D"];
 
@@ -98,26 +98,26 @@ const chart = LightweightCharts.createChart(document.getElementById("chart"), {
 const candles = chart.addCandlestickSeries({ upColor: "#26a69a", downColor: "#ef5350", borderVisible: false,
   wickUpColor: "#26a69a", wickDownColor: "#ef5350", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
 const median = chart.addLineSeries({ color: "#f5a623", lineWidth: 2, priceLineVisible: false,
-  title: "медиана продаж", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+  title: "sales median", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
 const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, color: "#3a4150",
-  title: "продано", priceLineVisible: false });
+  title: "sold", priceLineVisible: false });
 chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-// EV — ожидаемая стоимость открытия: сумма «цена предмета по последним 10 продажам × шанс выпадения».
+// EV - expected value of opening: sum of "item price over the last 10 sales x drop probability".
 const evLine = chart.addLineSeries({ color: "#4fc3f7", lineWidth: 2, priceLineVisible: false,
   title: "EV", priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
-// Вертикальная линия активного дропа: столбик на всю высоту на своей невидимой шкале.
+// Vertical line for the active drop pool: a full-height bar on its own hidden scale.
 const dropLine = chart.addHistogramSeries({ priceScaleId: "drop", priceLineVisible: false, lastValueVisible: false,
   priceFormat: { type: "volume" } });
 chart.priceScale("drop").applyOptions({ scaleMargins: { top: 0.06, bottom: 0 }, visible: false });
-// Индекс рынка: все кейсы с равными весами (старт 100) — на своей невидимой шкале, чтобы форма была сравнима с ценой.
+// Market index: all cases equally weighted (starts at 100), on its own hidden scale so its shape is comparable with price.
 const mktLine = chart.addLineSeries({ priceScaleId: "mkt", color: "#9ccc65", lineWidth: 1, priceLineVisible: false,
   lastValueVisible: false, priceFormat: { type: "price", precision: 1, minMove: 0.1 } });
 chart.priceScale("mkt").applyOptions({ scaleMargins: { top: 0.1, bottom: 0.25 }, visible: false });
-// Несглаженный EV тонкой бледной линией под сглаженным.
+// Unsmoothed EV as a thin faint line under the smoothed one.
 const evRaw = chart.addLineSeries({ color: "rgba(79,195,247,0.35)", lineWidth: 1, priceLineVisible: false,
   lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
 
-// Нижняя панель: отношение цены кейса (медиана продаж) к EV, синхронизирована по времени с основным графиком.
+// Lower panel: case price (sales median) to EV ratio, time-synced with the main chart.
 const ratioChart = LightweightCharts.createChart(document.getElementById("ratio"), {
   autoSize: true,
   layout: { background: { color: "#0f1115" }, textColor: "#c7c7c7" },
@@ -128,14 +128,14 @@ const ratioChart = LightweightCharts.createChart(document.getElementById("ratio"
 chart.applyOptions({ rightPriceScale: { minimumWidth: 80 } });
 const ratioLine = ratioChart.addLineSeries({ color: "#ce93d8", lineWidth: 2, priceLineVisible: false,
   priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
-// Пустые бары на всех временах верхнего графика: шкала времени в Lightweight Charts идёт по барам, и только при
-// одинаковом наборе баров обе панели двигаются и масштабируются синхронно.
+// Empty bars at every time of the main chart: the Lightweight Charts time scale is bar-based, and the two
+// panels pan and zoom in sync only when they have the same set of bars.
 const ratioTimes = ratioChart.addLineSeries({ lastValueVisible: false, priceLineVisible: false, visible: false });
-// Нужна, чтобы левая шкала нижней панели существовала и занимала ту же ширину, что и у верхнего графика.
+// Needed so the lower panel has a left scale of the same width as the main chart.
 const ratioLeft = ratioChart.addLineSeries({ priceScaleId: "left", lastValueVisible: false, priceLineVisible: false,
   color: "rgba(0,0,0,0)", crosshairMarkerVisible: false });
 ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
-// Настройки индикатора и шкалы, запоминаются в браузере.
+// Indicator and scale settings, remembered in the browser.
 const opts = { smType: "", smLen: 7, keyOn: false, keyPrice: 2.49, feeOn: false, log: false, pct: false, sep: false,
   low: "ev", hidden: [] };
 try { Object.assign(opts, JSON.parse(localStorage.getItem("evOpts") || "{}")); } catch (e) {}
@@ -145,7 +145,7 @@ function applyScale() {
   const mode = opts.pct ? LightweightCharts.PriceScaleMode.Percentage
     : opts.log ? LightweightCharts.PriceScaleMode.Logarithmic : LightweightCharts.PriceScaleMode.Normal;
   chart.applyOptions({ leftPriceScale: { visible: opts.sep, mode, minimumWidth: 80 }, rightPriceScale: { mode } });
-  // В режиме % индекс рынка встаёт на общую шкалу: все линии в процентах от одной точки.
+  // In % mode the market index moves to the shared scale: all lines in percent from the same point.
   mktLine.applyOptions({ priceScaleId: opts.pct ? "right" : "mkt" });
   ratioChart.applyOptions({ leftPriceScale: { visible: opts.sep } });
   for (const s of [evLine, evRaw]) s.applyOptions({ priceScaleId: opts.sep ? "left" : "right" });
@@ -184,7 +184,7 @@ function setLow(data, name) {
   ratioAt = new Map(data.map(d => [d.time, d.value]));
   if (typeof lowLegend !== "undefined") { lowLegend[0].row.querySelector(".nm").textContent = name; updateLegend(lowLegend); }
 }
-// Последние загруженные данные: при смене настроек индикатора перерисовываем без запросов.
+// Last loaded data: indicator settings changes re-render without new requests.
 let evData = [], hist = [], mktData = [];
 function renderEv() {
   const fee = opts.feeOn ? 1 / 1.15 : 1, key = opts.keyOn ? opts.keyPrice : 0;
@@ -193,32 +193,32 @@ function renderEv() {
   evLine.setData(sm.map(d => ({ time: d.time, value: d.value * fee - key })));
   evRaw.setData(opts.smType ? raw.map(d => ({ time: d.time, value: d.value * fee - key })) : []);
   evLine.applyOptions({ title: "EV" + (opts.smType ? ` ${opts.smType.toUpperCase()} ${opts.smLen}` : "")
-    + (key ? " − ключ" : "") + (fee < 1 ? " − комиссия" : "") });
-  // Отношение: сколько стоит открыть (кейс + ключ, если включён) к тому, что в среднем выпадет (после комиссии).
+    + (key ? " - key" : "") + (fee < 1 ? " - fee" : "") });
+  // Ratio: cost of opening (case + key, if enabled) to the average drop value (after the fee).
   const lastEv = evData[evData.length - 1];
   if (opts.low === "mkt") {
-    // Сила кейса относительно рынка: цена кейса / индекс рынка, 1 — в начале истории. Растёт — кейс сильнее рынка.
+    // Case strength vs the market: case price / market index, 1 at the start of history. Rising - the case beats the market.
     const idx = new Map(mktData.map(d => [d.time, d.value]));
     const pts = hist.filter(h => h.median !== null && idx.get(Math.floor(h.time / 86400) * 86400))
       .map(h => ({ time: h.time, value: h.median / idx.get(Math.floor(h.time / 86400) * 86400) }));
     const base = pts.length ? pts[0].value : 1;
-    setLow(pts.map(p => ({ time: p.time, value: p.value / base })), "Кейс / рынок");
-    $("ratioLabel").textContent = "Кейс / индекс рынка (1 — начало истории): растёт — кейс сильнее рынка, падает — слабее";
+    setLow(pts.map(p => ({ time: p.time, value: p.value / base })), "Case / market");
+    $("ratioLabel").textContent = "Case / market index (1 = start of history): rising - case beats the market, falling - lags it";
     return;
   }
   const evByDay = new Map(sm.map(d => [d.time, d.value * fee]));
   const evAt = t => evByDay.get(Math.floor(t / 86400) * 86400);
-  const what = key ? "(кейс + ключ) / EV" : "Цена / EV";
+  const what = key ? "(case + key) / EV" : "Price / EV";
   setLow(hist.filter(h => h.median !== null && evAt(h.time))
     .map(h => ({ time: h.time, value: (h.median + key) / evAt(h.time) })), what);
   $("ratioLabel").textContent = lastEv
-    ? `${what}${fee < 1 ? " после комиссии" : ""}. EV сейчас $${lastEv.ev.toFixed(2)}, посчитано ${(lastEv.coverage * 100).toFixed(0)}% вероятности. `
-      + (key ? "Ниже 1 — открывать выгодно в среднем" : "Выше 1 — кейс дороже того, что из него в среднем выпадает")
-    : "Цена / EV: EV этого кейса ещё не посчитан (облако собирает цены предметов кейс за кейсом)";
+    ? `${what}${fee < 1 ? " after fee" : ""}. EV now $${lastEv.ev.toFixed(2)}, ${(lastEv.coverage * 100).toFixed(0)}% of probability priced. `
+      + (key ? "Below 1 - opening pays off on average" : "Above 1 - the case costs more than its average drop")
+    : "Price / EV: EV for this case is not computed yet (the cloud collects item prices case by case)";
 }
 
 let medianAt = new Map(), ratioAt = new Map();
-// Синхронизация панелей: одинаковый набор баров (ratioTimes) + общий логический диапазон и перекрестие.
+// Panel sync: same set of bars (ratioTimes) + shared logical range and crosshair.
 let syncing = false;
 function linkRange(from, to) {
   from.timeScale().subscribeVisibleLogicalRangeChange(r => {
@@ -257,7 +257,7 @@ ratioChart.subscribeCrosshairMove(p => {
   syncing = false;
 });
 
-// Легенда: каждая строка управляет одной или несколькими сериями; скрытые запоминаются.
+// Legend: each row controls one or more series; hidden ones are remembered.
 function makeLegend(box, entries) {
   const el = document.createElement("div");
   el.className = "legend";
@@ -265,7 +265,7 @@ function makeLegend(box, entries) {
   for (const e of entries) {
     const row = document.createElement("div");
     row.className = "it";
-    row.innerHTML = '<span class="nm"></span><span class="val"></span><button class="eye" title="Скрыть / показать">👁</button>';
+    row.innerHTML = '<span class="nm"></span><span class="val"></span><button class="eye" title="Hide / show">👁</button>';
     row.querySelector(".nm").textContent = e.name;
     row.querySelector(".nm").style.color = e.color;
     const apply = () => {
@@ -294,16 +294,16 @@ function updateLegend(entries, p) {
   }
 }
 const mainLegend = makeLegend($("chart"), [
-  { key: "candles", name: "Мин. цена (свечи)", color: "#26a69a", series: [candles], digits: 2 },
-  { key: "median", name: "Медиана продаж", color: "#f5a623", series: [median], digits: 2 },
-  { key: "volume", name: "Продано", color: "#8a8f98", series: [volume], digits: 0 },
+  { key: "candles", name: "Lowest price (candles)", color: "#26a69a", series: [candles], digits: 2 },
+  { key: "median", name: "Sales median", color: "#f5a623", series: [median], digits: 2 },
+  { key: "volume", name: "Sold", color: "#8a8f98", series: [volume], digits: 0 },
   { key: "ev", name: "EV", color: "#4fc3f7", series: [evLine, evRaw], digits: 2 },
-  { key: "mkt", name: "Индекс рынка", color: "#9ccc65", series: [mktLine], digits: 1 },
-  { key: "drop", name: "Линия дропа", color: "#ef5350", series: [dropLine], digits: 0 },
+  { key: "mkt", name: "Market index", color: "#9ccc65", series: [mktLine], digits: 1 },
+  { key: "drop", name: "Drop pool line", color: "#ef5350", series: [dropLine], digits: 0 },
 ]);
 mainLegend.find(e => e.key === "drop").val.style.display = "none";
 const lowLegend = makeLegend($("ratioBox"), [
-  { key: "low", name: "Нижняя панель", color: "#ce93d8", series: [ratioLine], digits: 2 },
+  { key: "low", name: "Lower panel", color: "#ce93d8", series: [ratioLine], digits: 2 },
 ]);
 
 const tfs = document.getElementById("tfs");
@@ -338,20 +338,20 @@ async function loadChart(fit) {
   document.getElementById("title").textContent = current.market_hash_name;
   const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
   candles.setData(bars);
-  // История продаж Steam идёт по часам, поэтому медиана и объём есть только на таймфреймах от 1ч.
+  // Steam sales history is hourly, so the median and volume exist only on 1h and above.
   hist = [];
   if (HOURLY.includes(tf)) hist = await (await fetch(`/api/sales?item_id=${current.id}&tf=${tf}`)).json();
   median.setData(hist.filter(h => h.median !== null).map(h => ({ time: h.time, value: h.median })));
-  // Старше ~30 дней Steam хранит продажи только по дням: на 1ч и 4ч такой столбик — продажи за целые сутки,
-  // поэтому он выше часовых. Красим их иначе, чтобы не путать.
+  // Steam keeps only daily sales older than ~30 days: on 1h and 4h such a bar is a whole day of sales,
+  // so it is taller than hourly ones. Colored differently to avoid confusion.
   volume.setData(hist.map(h => ({ time: h.time, value: h.volume, color: h.daily ? "#5c4a2a" : "#3a4150" })));
-  // EV есть по дням; на 1ч и 4ч линия идёт ступеньками по дням.
-  // Активный дроп: для ушедших кейсов — дата ухода, для ещё активных — прогноз по среднему сроку прошлых.
+  // EV is daily; on 1h and 4h the line steps by day.
+  // Active drop pool: exit date for retired cases, forecast from the average lifetime for active ones.
   const drop = await (await fetch(`/api/drop?item_id=${current.id}`)).json();
   const stepD = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
   const dropDate = drop && (drop.left_active || drop.forecast);
-  // Шкала времени в Lightweight Charts идёт по барам, а не по календарю: если дата вне данных (прогноз в будущем
-  // или уход до начала истории), заполняем промежуток пустыми барами, чтобы линия встала на своё место.
+  // The Lightweight Charts time scale is bar-based, not calendar-based: if the date is outside the data (a future
+  // forecast or an exit before history starts), fill the gap with empty bars so the line lands on its date.
   const allTimes = [...bars.map(b => b.time), ...hist.map(h => h.time)];
   const t = dropDate ? Math.floor(Date.parse(dropDate + "T00:00:00Z") / 1000 / stepD) * stepD : null;
   const first = Math.min(...allTimes), last = Math.max(...allTimes);
@@ -363,15 +363,15 @@ async function loadChart(fit) {
     pts.push({ time: t, value: 1, color: forecast ? "rgba(239,83,80,0.6)" : "rgba(138,143,152,0.5)" });
     dropLine.setData(pts.sort((a, b) => a.time - b.time));
     dropLine.setMarkers([{ time: t, position: "aboveBar", color: forecast ? "#ef5350" : "#8a8f98", shape: "circle",
-      text: forecast ? `прогноз ухода из дропа ${dropDate}` : `ушёл из дропа ${dropDate}` }]);
+      text: forecast ? `forecast: leaves drop pool ${dropDate}` : `left drop pool ${dropDate}` }]);
   } else { dropLine.setData([]); dropLine.setMarkers([]); }
   evData = [];
   if (HOURLY.includes(tf)) evData = await (await fetch(`/api/ev?item_id=${current.id}`)).json();
-  // Индекс рынка — по дням, поэтому как и EV только на таймфреймах от часа.
+  // The market index is daily, so like EV it is shown only on 1h and above.
   mktData = HOURLY.includes(tf) ? await (await fetch("/api/market")).json() : [];
   mktLine.setData(mktData.map(d => ({ time: d.time, value: d.value })));
   renderEv();
-  // Новости — флажки на графике. Время флажка должно совпасть со временем бара, поэтому округляем до таймфрейма.
+  // News markers on the chart. A marker time must match a bar time, so it is rounded to the timeframe.
   const step = { "1": 60, "5": 300, "15": 900, "60": 3600, "240": 14400, "1D": 86400 }[tf];
   const target = HOURLY.includes(tf) ? volume : candles;
   (HOURLY.includes(tf) ? candles : volume).setMarkers([]);
@@ -379,14 +379,14 @@ async function loadChart(fit) {
   const marks = [...new Set(newsItems.map(n => Math.floor(n.ts / step) * step))].filter(t => times.has(t));
   target.setMarkers(marks.sort((a, b) => a - b).map(time => ({ time, position: "aboveBar",
     color: "#f5a623", shape: "arrowDown", text: "N" })));
-  const dropHint = drop && drop.forecast ? `Красная линия — прогноз ухода из активного дропа: выход ${drop.released} + `
-    + `${drop.mean_days} дн. (средний срок прошлых обычных кейсов). ` : "";
+  const dropHint = drop && drop.forecast ? `Red line - forecast exit from the active drop pool: release ${drop.released} + `
+    + `${drop.mean_days} days (average lifetime of past regular cases). ` : "";
   document.getElementById("hint").textContent = dropHint + (HOURLY.includes(tf)
-    ? (!hist.length ? "Истории продаж пока нет: нужен cookie Steam в облаке."
-       : hist.some(h => h.daily) ? "Коричневые столбики — продажи за целые сутки: старше ~30 дней Steam хранит историю только по дням." : "")
-    : "Объём продаж и медиана есть только на 1ч, 4ч, 1Д.");
+    ? (!hist.length ? "No sales history yet: the cloud needs a Steam cookie."
+       : hist.some(h => h.daily) ? "Brown bars are whole-day sales: Steam keeps only daily history older than ~30 days." : "")
+    : "Sales volume and median are available on 1h, 4h and 1D only.");
   if (fit) {
-    // Свечи есть только с момента запуска сборщика, а история продаж — за годы: показываем последние ~200 баров.
+    // Candles exist only since the collector started, sales history spans years: show the last ~200 bars.
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
     if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
   }
@@ -395,7 +395,7 @@ async function loadChart(fit) {
 }
 
 let newsItems = [];
-// Панель новостей сворачивается вправо в узкую полоску; состояние запоминается в браузере.
+// The news panel collapses to a narrow strip on the right; the state is remembered in the browser.
 const newsPanel = document.getElementById("news"), newsToggle = document.getElementById("newsToggle");
 function setNewsCollapsed(c) {
   newsPanel.classList.toggle("collapsed", c);
@@ -405,7 +405,7 @@ function setNewsCollapsed(c) {
 newsToggle.onclick = e => { e.stopPropagation(); setNewsCollapsed(!newsPanel.classList.contains("collapsed")); };
 newsPanel.onclick = () => { if (newsPanel.classList.contains("collapsed")) setNewsCollapsed(false); };
 try { setNewsCollapsed(localStorage.getItem("newsCollapsed") === "1"); } catch (e) {}
-// Текст новостей Steam приходит в BBCode/HTML: для панели оставляем только текст.
+// Steam news text comes as BBCode/HTML: keep only the text for the panel.
 const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[img\][\s\S]*?\[\/img\]/gi, "")
   .replace(/<img[^>]*>/gi, "").replace(/https?:\/\/\S+\.(png|jpe?g|gif|webp)\S*/gi, "").replace(/\[\/?(p|br|list|olist|\*|h\d)\]/g, "\n")
   .replace(/\[[^\]]*\]/g, "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim();
@@ -414,7 +414,7 @@ async function loadNews() {
   if (!current) return;
   newsItems = await (await fetch(`/api/news?item_id=${current.id}`)).json();
   const box = document.getElementById("newsList");
-  box.innerHTML = newsItems.length ? "" : '<div class="empty">Новостей с этим кейсом пока нет.</div>';
+  box.innerHTML = newsItems.length ? "" : '<div class="empty">No news for this case yet.</div>';
   for (const n of newsItems) {
     const el = document.createElement("div");
     el.className = "item";
@@ -430,8 +430,8 @@ async function loadNews() {
 async function loadStatus() {
   const s = await (await fetch("/api/status")).json();
   document.getElementById("status").textContent =
-    `Снимков в базе: ${s.ticks}. Последний: ${s.last_ts ? new Date(s.last_ts * 1000).toLocaleString() : "нет"}. ` +
-    `Точек истории продаж: ${s.sales_points}. Свечи — минимальная цена продажи, оранжевая линия — медиана реальных продаж, столбики — сколько продано.`;
+    `Snapshots in DB: ${s.ticks}. Latest: ${s.last_ts ? new Date(s.last_ts * 1000).toLocaleString() : "none"}. ` +
+    `Sales history points: ${s.sales_points}. Candles - lowest sell price, orange line - median of real sales, bars - units sold.`;
 }
 
 loadItems(); loadStatus();

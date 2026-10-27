@@ -1,6 +1,6 @@
-"""Облачный сервис: сборщик в фоне + API, через который дом забирает данные из буфера.
+"""Cloud service: the collector runs in the background, plus an API home uses to pull buffered data.
 
-Запуск: uvicorn cloud.server:app --host 0.0.0.0 --port 8000
+Run: uvicorn cloud.server:app --host 0.0.0.0 --port 8000
 """
 import asyncio
 import logging
@@ -20,7 +20,7 @@ buf = Buffer(config.BUFFER_PATH)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not config.API_TOKEN:
-        raise RuntimeError("Задайте переменную окружения API_TOKEN")
+        raise RuntimeError("Set the API_TOKEN environment variable")
     task = asyncio.create_task(collector.run(buf))
     yield
     task.cancel()
@@ -36,7 +36,7 @@ def auth(authorization: str = Header("")):
 
 @app.get("/health")
 def health():
-    """Без токена: жив ли сервис и когда последний раз удалось получить цены."""
+    """No token needed: is the service alive and when prices were last fetched."""
     s = buf.stats()
     return {"ok": True, "last_success_at": s["last_success_at"], "pending_ticks": s["pending_ticks"]}
 
@@ -62,9 +62,9 @@ def item_days(after_id: int = 0, limit: int = Query(5000, le=20000)):
 
 
 class Ack(BaseModel):
-    up_to_id: int | None = None        # цены (ticks)
-    sales_up_to_id: int | None = None  # история продаж
-    items_up_to_id: int | None = None  # дневные цены предметов из кейсов
+    up_to_id: int | None = None        # prices (ticks)
+    sales_up_to_id: int | None = None  # sales history
+    items_up_to_id: int | None = None  # daily prices of items inside cases
 
 
 @app.post("/api/ack", dependencies=[Depends(auth)])

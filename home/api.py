@@ -1,14 +1,14 @@
-"""Домашний backend: синхронизация с облаком в фоне + API для графиков.
+"""Home backend: syncs with the cloud in the background and serves the chart API.
 
-  /api/items     все кейсы с последней ценой и изменением за 24 ч
-  /api/candles   OHLC-свечи для TradingView Lightweight Charts
-  /api/news      новости Valve, связанные с кейсом
-  /api/ev        EV кейса по дням (ожидаемая стоимость открытия)
-  /api/drop      активный дроп кейса: дата ухода или прогноз ухода
-  /api/market    индекс рынка: все кейсы с равными весами, по дням
-  /udf/*         UDF-датафид для полной библиотеки TradingView Charting Library
+  /api/items     all cases with the latest price and 24h change
+  /api/candles   OHLC candles for TradingView Lightweight Charts
+  /api/news      Valve news linked to a case
+  /api/ev        case EV per day (expected value of opening)
+  /api/drop      active drop pool: exit date or exit forecast
+  /api/market    market index: all cases equally weighted, per day
+  /udf/*         UDF datafeed for the full TradingView Charting Library
 
-Запуск: python -m home
+Run: python -m home
 """
 import math
 import threading
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CS2 case prices (home)", lifespan=lifespan)
-# Фронт (React) будет отдельным dev-сервером, поэтому разрешаем запросы с других портов.
+# A React frontend would run on a separate dev server, so requests from other ports are allowed.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 
 
@@ -53,9 +53,9 @@ def q(sql: str, args=()):
 
 
 def candles(item_id: int, tf: int, start: int, end: int, source: str = "steam") -> list[dict]:
-    """Свечи из минутных снимков минимальной цены продажи: open/close — первый/последний снимок.
-    volume — настоящие продажи из истории Steam (есть только с шагом от часа, на меньших
-    таймфреймах 0), listings — среднее число лотов на продаже."""
+    """Candles from minute snapshots of the lowest sell price: open/close are the first/last snapshot.
+    volume is real sales from Steam history (only at steps of an hour or more; 0 on smaller
+    timeframes), listings is the average number of listings for sale."""
     rows = q(
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
                   (array_agg(price_cents ORDER BY ts))[1]      AS o,
@@ -76,7 +76,7 @@ def candles(item_id: int, tf: int, start: int, end: int, source: str = "steam") 
 
 
 def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") -> list[dict]:
-    """История продаж, сгруппированная по tf (не мельче часа): медиана, взвешенная по объёму, и сумма продаж."""
+    """Sales history grouped by tf (an hour at least): volume-weighted median and total sales."""
     tf = max(tf, 3600)
     rows = q(
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
@@ -112,34 +112,34 @@ def items():
 
 
 @app.get("/api/candles")
-def api_candles(item_id: int, tf: str = Query("60", description="1, 5, 15, 60, 240 (минуты) или 1D"),
+def api_candles(item_id: int, tf: str = Query("60", description="1, 5, 15, 60, 240 (minutes) or 1D"),
                 start: int | None = None, end: int | None = None):
     if tf not in RESOLUTIONS:
-        raise HTTPException(400, f"tf должен быть одним из {list(RESOLUTIONS)}")
+        raise HTTPException(400, f"tf must be one of {list(RESOLUTIONS)}")
     end = end or int(time.time()) + 60
     start = start or end - 2000 * RESOLUTIONS[tf]
     return candles(item_id, RESOLUTIONS[tf], start, end)
 
 
 @app.get("/api/sales")
-def api_sales(item_id: int, tf: str = Query("60", description="60, 240 (минуты) или 1D; мельче часа не бывает"),
+def api_sales(item_id: int, tf: str = Query("60", description="60, 240 (minutes) or 1D; nothing below an hour"),
               start: int = 0, end: int | None = None):
     if tf not in RESOLUTIONS:
-        raise HTTPException(400, f"tf должен быть одним из {list(RESOLUTIONS)}")
+        raise HTTPException(400, f"tf must be one of {list(RESOLUTIONS)}")
     return sales(item_id, RESOLUTIONS[tf], start, end or int(time.time()) + 3600)
 
 
 @app.get("/api/ev")
 def api_ev(item_id: int):
-    """EV по дням в долларах и покрытие (доля вероятности предметов с известной ценой)."""
+    """EV per day in dollars and coverage (probability share of items with a known price)."""
     return q("""SELECT extract(epoch FROM day)::bigint AS time, ev_cents / 100.0 AS ev, coverage
                 FROM case_ev WHERE item_id = %s ORDER BY day""", (item_id,))
 
 
 @app.get("/api/drop")
 def api_drop(item_id: int):
-    """Активный дроп: когда кейс вышел, когда ушёл из активного дропа, а для ещё активных — прогноз ухода
-    (дата выхода + средний срок прошлых обычных кейсов). Для ивентовых и прочих кейсов — null."""
+    """Active drop pool: when the case was released, when it left the active pool, and for cases still
+    in it a forecast (release + average lifetime of past regular cases). null for event and other cases."""
     rows = q("SELECT market_hash_name FROM items WHERE id = %s", (item_id,))
     return drop_pool.info(rows[0]["market_hash_name"]) if rows else None
 
@@ -149,9 +149,9 @@ _market_cache: dict = {"at": 0.0, "data": []}
 
 @app.get("/api/market")
 def api_market():
-    """Индекс рынка кейсов по дням: все кейсы с равными весами, цепной. Каждый день — среднее изменение
-    (логарифм дневной медианы) по кейсам, у которых есть продажи и в этот, и в предыдущий день, поэтому
-    появление нового кейса индекс не сдвигает. Старт — 100. Пересчитывается раз в 10 минут."""
+    """Daily market index of cases: all cases equally weighted, chain-linked. Each day is the average change
+    (log of the daily median) over cases with sales on both that day and the previous one, so a new case
+    entering does not shift the index. Starts at 100. Recomputed every 10 minutes."""
     if time.time() - _market_cache["at"] < 600:
         return _market_cache["data"]
     rows = q("""SELECT s.item_id, extract(epoch FROM date_trunc('day', s.ts AT TIME ZONE 'UTC'))::bigint AS day,
@@ -167,7 +167,7 @@ def api_market():
     for day in sorted(by_day):
         cur = by_day[day]
         if prev is not None:
-            # Изменение за день по каждому кейсу, обрезанное до ±50%, чтобы одна случайная сделка не двигала индекс.
+            # Each case's daily change is clipped to +-50% so a single random trade does not move the index.
             moves = [max(-0.7, min(0.4, math.log(cur[i] / prev[i]))) for i in cur if i in prev]
             if moves:
                 level *= math.exp(sum(moves) / len(moves))
@@ -179,7 +179,7 @@ def api_market():
 
 @app.get("/api/news")
 def api_news(item_id: int | None = None, limit: int = 200):
-    """Новости Valve: для кейса — где он упомянут, без item_id — все подряд. Новые сверху."""
+    """Valve news: for a case, the items mentioning it; without item_id, all of them. Newest first."""
     where, args = "", {"limit": limit}
     if item_id is not None:
         where, args["id"] = "WHERE n.gid IN (SELECT gid FROM item_news WHERE item_id = %(id)s)", item_id
@@ -259,5 +259,5 @@ def udf_history(symbol: str, resolution: str, to: int, from_: int = Query(..., a
             "c": [b["close"] for b in bars], "v": [b["volume"] for b in bars]}
 
 
-# Временная страница для проверки графиков, пока нет React-фронта.
+# Simple chart page served by the backend itself.
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
