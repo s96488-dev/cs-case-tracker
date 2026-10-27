@@ -12,16 +12,45 @@ catches up when it comes back.
 
 Russian setup guide with every step: [docs/setup-ru.md](docs/setup-ru.md).
 
+![Chart page with demo data](docs/screenshot.png)
+<sub>The chart page running on synthetic demo data.</sub>
+
+## Quick start (demo)
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+Open <http://localhost:8080>. This starts PostgreSQL and the home backend with synthetic data for a few
+cases (real names, made-up prices), so no cloud VM or Steam account is needed.
+
 ## Architecture
 
+```mermaid
+flowchart LR
+    steam[Steam Community Market]
+    subgraph cloud [Cloud: GCP e2-micro, Docker]
+        collector[collector<br/>asyncio + curl_cffi]
+        buffer[(SQLite buffer)]
+        pull[pull API<br/>FastAPI behind Caddy]
+        collector --> buffer --> pull
+    end
+    subgraph home [Home PC]
+        sync[sync worker]
+        pg[(PostgreSQL)]
+        evjob[EV job]
+        api[chart API + page<br/>FastAPI, Lightweight Charts]
+        sync --> pg
+        pg <--> evjob
+        pg --> api
+    end
+    steam -- "prices every minute,<br/>hourly sales history" --> collector
+    sync -- "HTTPS + bearer token,<br/>pull by cursor, ack" --> pull
+    valve[Steam News API] --> api
+    bymykel[ByMykel/CSGO-API<br/>case contents] --> evjob
 ```
-            every 60 s                                      when the PC is on, once a minute
- Steam Market ───────────► Cloud (GCP e2-micro, Docker)  ◄──────────── Home PC (Windows)
- search/render             cloud/: collector               HTTPS +     home/: sync worker
- pricehistory              + SQLite buffer                 bearer      → PostgreSQL
-                           + pull API behind Caddy         token       → FastAPI + chart page :8080
-                           keeps undelivered rows 60 days              → EV and market index
-```
+
+The cloud keeps undelivered rows for up to 60 days, so the home PC can be off and catch up later.
 
 - **cloud/**: an asyncio collector (case prices every minute, hourly sales history per case, item price
   history case by case), a SQLite buffer and a small FastAPI pull API. Caddy terminates TLS.
@@ -139,8 +168,13 @@ Cloud (all but `/health` need `Authorization: Bearer <API_TOKEN>`): `GET /health
 | `deploy/` | VM setup, auto-update, Steam cookie setup |
 | `Dockerfile`, `docker-compose.yml`, `Caddyfile` | cloud runtime with HTTPS |
 | `*.bat` | Windows start and autostart scripts |
+| `home.Dockerfile`, `docker-compose.demo.yml`, `home/demo.py` | one-command demo with synthetic data |
 
 ## Stack
 
 Python 3.11+, asyncio, FastAPI, curl_cffi, SQLite, PostgreSQL (psycopg 3), Docker Compose, Caddy,
 Google Cloud, Lightweight Charts.
+
+## License
+
+[MIT](LICENSE)

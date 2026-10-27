@@ -169,6 +169,9 @@ def sync_items_once(client: httpx.Client) -> int:
 
 
 def run_forever(stop=None):
+    if not config.CLOUD_TOKEN:
+        log.info("CLOUD_TOKEN is not set: cloud sync is off")
+        return
     with httpx.Client(timeout=60, headers={"Authorization": f"Bearer {config.CLOUD_TOKEN}"}) as client:
         while not (stop and stop.is_set()):
             try:

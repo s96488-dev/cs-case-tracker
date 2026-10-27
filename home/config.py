@@ -13,3 +13,5 @@ NEWS_INTERVAL = int(os.getenv("NEWS_INTERVAL", "3600"))
 # How often to recompute case EV (when new item prices arrive), seconds.
 EV_INTERVAL = int(os.getenv("EV_INTERVAL", "3600"))
 API_PORT = int(os.getenv("API_PORT", "8080"))
+# 127.0.0.1 keeps the page local to this computer; the demo container sets 0.0.0.0.
+API_HOST = os.getenv("API_HOST", "127.0.0.1")

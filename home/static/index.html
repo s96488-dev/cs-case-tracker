@@ -214,6 +214,7 @@ function renderEv() {
   $("ratioLabel").textContent = lastEv
     ? `${what}${fee < 1 ? " after fee" : ""}. EV now $${lastEv.ev.toFixed(2)}, ${(lastEv.coverage * 100).toFixed(0)}% of probability priced. `
       + (key ? "Below 1 - opening pays off on average" : "Above 1 - the case costs more than its average drop")
+    : !HOURLY.includes(tf) ? "Price / EV: EV is daily, so it is shown on 1h, 4h and 1D"
     : "Price / EV: EV for this case is not computed yet (the cloud collects item prices case by case)";
 }
 
@@ -324,9 +325,10 @@ async function loadItems() {
     const chg = it.price_24h ? (it.price / it.price_24h - 1) * 100 : 0;
     const row = document.createElement("div");
     row.className = "row" + (current && current.id === it.id ? " active" : "");
-    row.innerHTML = `<img src="${it.icon_url || ""}" alt=""><span class="name"></span>
+    row.innerHTML = `<img alt=""${it.icon_url ? "" : ' style="visibility:hidden"'}><span class="name"></span>
       <span class="price">$${it.price.toFixed(2)}<br><span class="chg ${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span></span>`;
     row.querySelector(".name").textContent = it.market_hash_name;
+    if (it.icon_url) row.querySelector("img").src = it.icon_url;
     row.onclick = () => { current = it; loadItems(); loadNews().then(() => loadChart(true)); };
     list.appendChild(row);
   }
