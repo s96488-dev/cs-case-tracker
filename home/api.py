@@ -10,7 +10,6 @@
 
 Run: python -m home
 """
-import math
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -21,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from common import drop_pool
+from common.market import market_index
 
 from . import ev, news, sync
 from .db import ensure_database, open_pool, pool
@@ -80,7 +80,8 @@ def sales(item_id: int, tf: int, start: int, end: int, source: str = "steam") ->
     tf = max(tf, 3600)
     rows = q(
         """SELECT extract(epoch FROM date_bin(make_interval(secs => %(tf)s), ts, 'epoch'))::bigint AS time,
-                  sum(median_cents::bigint * volume) / NULLIF(sum(volume) FILTER (WHERE median_cents IS NOT NULL), 0) AS median,
+                  sum(median_cents::bigint * volume)
+                      / NULLIF(sum(volume) FILTER (WHERE median_cents IS NOT NULL), 0) AS median,
                   avg(median_cents) AS median_plain,
                   sum(volume) AS volume, max(currency) AS currency, max(span_secs) AS span
            FROM sales_history
@@ -149,9 +150,7 @@ _market_cache: dict = {"at": 0.0, "data": []}
 
 @app.get("/api/market")
 def api_market():
-    """Daily market index of cases: all cases equally weighted, chain-linked. Each day is the average change
-    (log of the daily median) over cases with sales on both that day and the previous one, so a new case
-    entering does not shift the index. Starts at 100. Recomputed every 10 minutes."""
+    """Daily market index of cases (see common/market.py). Recomputed every 10 minutes."""
     if time.time() - _market_cache["at"] < 600:
         return _market_cache["data"]
     rows = q("""SELECT s.item_id, extract(epoch FROM date_trunc('day', s.ts AT TIME ZONE 'UTC'))::bigint AS day,
@@ -163,16 +162,7 @@ def api_market():
     for r in rows:
         if r["price"]:
             by_day.setdefault(r["day"], {})[r["item_id"]] = r["price"]
-    out, level, prev = [], 100.0, None
-    for day in sorted(by_day):
-        cur = by_day[day]
-        if prev is not None:
-            # Each case's daily change is clipped to +-50% so a single random trade does not move the index.
-            moves = [max(-0.7, min(0.4, math.log(cur[i] / prev[i]))) for i in cur if i in prev]
-            if moves:
-                level *= math.exp(sum(moves) / len(moves))
-        out.append({"time": day, "value": round(level, 3), "cases": len(cur)})
-        prev = {**(prev or {}), **cur}
+    out = market_index(by_day)
     _market_cache.update(at=time.time(), data=out)
     return out
 

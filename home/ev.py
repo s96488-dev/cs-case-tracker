@@ -1,10 +1,12 @@
-"""Daily case EV from daily item prices (see common/ev.py): every minute we check for new prices and recompute at most every EV_INTERVAL.
+"""Daily case EV from daily item prices (see common/ev.py).
+
+Every minute we check for new prices and recompute at most every EV_INTERVAL.
 
 Case contents and odds come from common/case_contents.py (the open ByMykel/CSGO-API dataset, downloaded daily).
 """
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -19,7 +21,7 @@ MIN_COVERAGE = 0.8
 
 
 def _epoch(d) -> int:
-    return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+    return int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp())
 
 
 def compute_all(contents: dict[str, dict[str, float]]) -> int:
@@ -48,7 +50,7 @@ def compute_all(contents: dict[str, dict[str, float]]) -> int:
         with pool.connection() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM case_ev WHERE item_id = %s", (case["id"],))
             cur.executemany("INSERT INTO case_ev VALUES (%s, %s, %s, %s)",
-                            [(case["id"], datetime.fromtimestamp(d, timezone.utc).date(), ev, cov)
+                            [(case["id"], datetime.fromtimestamp(d, UTC).date(), ev, cov)
                              for d, ev, cov in series])
         done += 1
     return done

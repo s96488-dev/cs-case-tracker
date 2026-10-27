@@ -6,3 +6,6 @@ __pycache__/
 home.log
 # Auto-update cron log (cannot live in data/: Docker creates it as root).
 update.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

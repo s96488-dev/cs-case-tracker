@@ -3,8 +3,14 @@ Prints only expiry dates and the price-history currency, never the tokens themse
 import asyncio
 import time
 
-from common.steam import (HISTORY_URL, SteamAuthError, jwt_expires_at, make_client, refresh_login_secure,
-                          split_login_cookie)
+from common.steam import (
+    HISTORY_URL,
+    SteamAuthError,
+    jwt_expires_at,
+    make_client,
+    refresh_login_secure,
+    split_login_cookie,
+)
 
 from . import config
 

@@ -7,6 +7,7 @@ margin in case home loses data); unacknowledged rows are kept for up to MAX_DAYS
 import sqlite3
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from common.models import Item, PriceTick, SalePoint
@@ -81,7 +82,7 @@ class Buffer:
             self.conn.execute("ALTER TABLE sales ADD COLUMN span INTEGER NOT NULL DEFAULT 3600")
         self.lock = threading.Lock()
 
-    def save(self, ticks: list[PriceTick], items: list[Item]) -> int:
+    def save(self, ticks: list[PriceTick], items: Sequence[Item]) -> int:
         with self.lock, self.conn:
             self.conn.executemany(
                 """INSERT INTO items VALUES (?, ?, ?) ON CONFLICT(market_hash_name) DO UPDATE
@@ -179,8 +180,9 @@ class Buffer:
             ticks = [dict(r) for r in self.conn.execute(
                 "SELECT * FROM ticks WHERE id > ? ORDER BY id LIMIT ?", (after_id, limit))]
             names = sorted({t["market_hash_name"] for t in ticks})
+            marks = ",".join("?" * len(names))
             items = [dict(r) for r in self.conn.execute(
-                f"SELECT * FROM items WHERE market_hash_name IN ({','.join('?' * len(names))})", names)] if names else []
+                f"SELECT * FROM items WHERE market_hash_name IN ({marks})", names)] if names else []
             max_id = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM ticks").fetchone()[0]
         return {"ticks": ticks, "items": items, "max_id": max_id,
                 "has_more": bool(ticks) and ticks[-1]["id"] < max_id}
@@ -216,8 +218,8 @@ class Buffer:
             acked = int(self._state("acked_id") or 0)
             last_ok = self.conn.execute("SELECT MAX(ts) FROM fetch_log WHERE ok = 1").fetchone()[0]
             last = self.conn.execute("SELECT ts, ok, items, error FROM fetch_log ORDER BY id DESC LIMIT 1").fetchone()
-            day = self.conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(ok), 0) FROM fetch_log WHERE ts >= ?", (int(time.time()) - 86400,)).fetchone()
+            day = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(ok), 0) FROM fetch_log WHERE ts >= ?",
+                                    (int(time.time()) - 86400,)).fetchone()
             return {
                 "buffered_ticks": self.conn.execute("SELECT COUNT(*) FROM ticks").fetchone()[0],
                 "pending_ticks": self.conn.execute("SELECT COUNT(*) FROM ticks WHERE id > ?", (acked,)).fetchone()[0],

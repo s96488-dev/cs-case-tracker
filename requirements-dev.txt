@@ -1,0 +1,5 @@
+-r requirements-cloud.txt
+-r requirements-home.txt
+pytest>=8
+ruff>=0.6
+mypy>=1.10

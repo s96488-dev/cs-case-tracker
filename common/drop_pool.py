@@ -41,7 +41,7 @@ def _days(released: str, left: str) -> int:
     return (date.fromisoformat(left) - date.fromisoformat(released)).days
 
 
-MEAN_DAYS = round(mean(_days(r, l) for r, l in CASES.values() if l))
+MEAN_DAYS = round(mean(_days(released, left) for released, left in CASES.values() if left))
 
 
 def info(name: str) -> dict | None:
