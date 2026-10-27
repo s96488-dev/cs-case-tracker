@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import ConnectionPool
 
 from . import config
@@ -9,6 +9,7 @@ from . import config
 SCHEMA_SQL = (Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
 
 pool = ConnectionPool(config.DATABASE_URL, min_size=1, max_size=5, open=False,
+                      connection_class=psycopg.Connection[DictRow],
                       kwargs={"row_factory": dict_row, "autocommit": False})
 
 
@@ -29,5 +30,5 @@ def ensure_database():
         if not name or "does not exist" not in str(e):
             raise
     info["dbname"] = "postgres"
-    with psycopg.connect(psycopg.conninfo.make_conninfo(**info), autocommit=True) as conn:
+    with psycopg.connect(psycopg.conninfo.make_conninfo("", **info), autocommit=True) as conn:
         conn.execute(f'CREATE DATABASE "{name}"')

@@ -9,11 +9,19 @@ import asyncio
 import logging
 import time
 
-from common.steam import (SteamAuthError, SteamRateLimited, fetch_cases, fetch_price_history, jwt_expires_at,
-                          make_client, refresh_login_secure, split_login_cookie)
-
-from common.case_contents import CRATES_URL, SKINS_URL, build as build_contents
+from common.case_contents import CRATES_URL, SKINS_URL
+from common.case_contents import build as build_contents
 from common.ev import daily_points
+from common.steam import (
+    SteamAuthError,
+    SteamRateLimited,
+    fetch_cases,
+    fetch_price_history,
+    jwt_expires_at,
+    make_client,
+    refresh_login_secure,
+    split_login_cookie,
+)
 
 from . import config
 from .buffer import Buffer
@@ -106,7 +114,8 @@ async def run_items(buf: Buffer, client, login: SteamLogin, contents: Contents, 
     if not names:
         return
     await asyncio.to_thread(buf.set_state, "items_total", str(len(names)))
-    todo = await asyncio.to_thread(buf.items_to_fetch, names, int((deadline - time.time()) / max(config.HISTORY_PAUSE, 1)) + 1)
+    budget = int((deadline - time.time()) / max(config.HISTORY_PAUSE, 1)) + 1
+    todo = await asyncio.to_thread(buf.items_to_fetch, names, budget)
     fails = done = 0
     for name in todo:
         if time.time() > deadline:

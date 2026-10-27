@@ -1,5 +1,7 @@
 # CS2 Case Price Tracker
 
+[![CI](https://github.com/s96488-dev/cs-case-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/s96488-dev/cs-case-tracker/actions/workflows/ci.yml)
+
 A small data pipeline that records the Steam Community Market price of every CS2 weapon case (~45) once a
 minute, 24/7, pulls years of sales history, and computes a "fundamental" value for each case from the
 prices of the ~10,000 skins, knives and gloves that can drop from it.
@@ -92,6 +94,17 @@ the postgres password, cloud URL and token, run `start-home.bat`, open <http://1
 `install-autostart.bat` starts it hidden on every login and restarts it if it crashes. The database and
 tables are created automatically.
 
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+ruff check . && mypy && pytest
+```
+
+Unit tests cover Steam parsing, drop odds, EV and the market index. `tests/test_pipeline.py` runs the whole
+path (cloud buffer, pull API, home sync, PostgreSQL, chart API) against a disposable database given in
+`TEST_DATABASE_URL`; CI runs everything on Python 3.11 and 3.13 with PostgreSQL 16.
+
 ## API
 
 Home (port 8080):
@@ -122,6 +135,7 @@ Cloud (all but `/health` need `Authorization: Bearer <API_TOKEN>`): `GET /health
 | `common/drop_pool.py` | active drop pool history and forecast |
 | `cloud/` | collector, SQLite buffer, pull API |
 | `home/` | sync worker, PostgreSQL schema, EV job, news, chart API and page |
+| `tests/` | unit tests and the end-to-end pipeline test |
 | `deploy/` | VM setup, auto-update, Steam cookie setup |
 | `Dockerfile`, `docker-compose.yml`, `Caddyfile` | cloud runtime with HTTPS |
 | `*.bat` | Windows start and autostart scripts |

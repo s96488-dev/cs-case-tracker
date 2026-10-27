@@ -5,7 +5,7 @@ A news item is linked to a case if its title or text contains the exact case nam
 """
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -20,7 +20,7 @@ PAGE = 100
 
 
 def _fetch_page(client: httpx.Client, enddate: int | None) -> list[dict]:
-    params = {"appid": 730, "count": PAGE, "maxlength": 0, "feeds": FEED}
+    params: dict[str, int | str] = {"appid": 730, "count": PAGE, "maxlength": 0, "feeds": FEED}
     if enddate:
         params["enddate"] = enddate
     r = client.get(NEWS_URL, params=params)
@@ -56,7 +56,7 @@ def fetch_news(client: httpx.Client) -> int:
             cur.executemany(
                 """INSERT INTO news (gid, ts, title, url, contents) VALUES (%s, %s, %s, %s, %s)
                    ON CONFLICT DO NOTHING""",
-                [(n["gid"], datetime.fromtimestamp(n["date"], timezone.utc), n["title"], n["url"],
+                [(n["gid"], datetime.fromtimestamp(n["date"], UTC), n["title"], n["url"],
                   n.get("contents") or "") for n in added])
     return len(added)
 

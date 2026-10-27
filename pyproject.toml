@@ -1,0 +1,23 @@
+[project]
+name = "cs-case-tracker"
+version = "1.0.0"
+description = "Steam Market price tracker for CS2 cases with a cloud collector, home PostgreSQL and case EV"
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["home/static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+files = ["common", "cloud", "home"]

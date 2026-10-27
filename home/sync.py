@@ -5,7 +5,7 @@ Writes are idempotent (primary key item_id+source+ts), so re-loading creates no 
 """
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -39,7 +39,7 @@ def _store(conn, batch: dict, new_cursor: int):
         cur.executemany(
             """INSERT INTO price_ticks (item_id, source, ts, price_cents, currency, listings)
                VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-            [(ids[t["market_hash_name"]], t["source"], datetime.fromtimestamp(t["ts"], timezone.utc),
+            [(ids[t["market_hash_name"]], t["source"], datetime.fromtimestamp(t["ts"], UTC),
               t["price_cents"], t["currency"], t["listings"]) for t in batch["ticks"]])
     _set_cursor(conn, "cloud_cursor", new_cursor)
 
@@ -92,15 +92,15 @@ def _store_sales(conn, rows: list[dict], new_cursor: int):
                AND ts >= %s AND ts < %s + interval '1 day' AND ts <> %s""",
             [(ids[r["market_hash_name"]], r["source"], day, day, ts)
              for r in daily
-             for ts in [datetime.fromtimestamp(r["ts"], timezone.utc)]
-             for day in [datetime.fromtimestamp(r["ts"] // 86400 * 86400, timezone.utc)]])
+             for ts in [datetime.fromtimestamp(r["ts"], UTC)]
+             for day in [datetime.fromtimestamp(r["ts"] // 86400 * 86400, UTC)]])
         cur.executemany(
             """INSERT INTO sales_history (item_id, source, ts, median_cents, volume, currency, span_secs)
                VALUES (%s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (item_id, source, ts) DO UPDATE
                SET median_cents = EXCLUDED.median_cents, volume = EXCLUDED.volume, currency = EXCLUDED.currency,
                    span_secs = EXCLUDED.span_secs""",
-            [(ids[r["market_hash_name"]], r["source"], datetime.fromtimestamp(r["ts"], timezone.utc),
+            [(ids[r["market_hash_name"]], r["source"], datetime.fromtimestamp(r["ts"], UTC),
               r["median_cents"], r["volume"], r["currency"], r.get("span", 3600)) for r in rows])
     _set_cursor(conn, "cloud_sales_cursor", new_cursor)
 
@@ -158,7 +158,7 @@ def sync_items_once(client: httpx.Client) -> int:
                    VALUES (%s, %s, %s, %s)
                    ON CONFLICT (market_hash_name, day) DO UPDATE
                    SET median_cents = EXCLUDED.median_cents, volume = EXCLUDED.volume""",
-                [(r["market_hash_name"], datetime.fromtimestamp(r["day"], timezone.utc).date(),
+                [(r["market_hash_name"], datetime.fromtimestamp(r["day"], UTC).date(),
                   r["median_cents"], r["volume"]) for r in batch["items"]])
             _set_cursor(conn, "cloud_items_cursor", new_cursor)
         client.post(f"{config.CLOUD_URL}/api/ack", json={"items_up_to_id": new_cursor}).raise_for_status()

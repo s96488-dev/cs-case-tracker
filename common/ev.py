@@ -32,7 +32,12 @@ def daily_points(points) -> list[tuple[int, int, int]]:
     for p in points:
         if p.median_cents is not None and p.volume > 0:
             by_day.setdefault(p.ts // DAY * DAY, []).append((p.median_cents, p.volume))
-    return [(d, round(weighted_median(v)), sum(x for _, x in v)) for d, v in sorted(by_day.items())]
+    out = []
+    for d, v in sorted(by_day.items()):
+        m = weighted_median(v)
+        if m is not None:
+            out.append((d, round(m), sum(x for _, x in v)))
+    return out
 
 
 def price_series(days: list[tuple[int, int, int]], start: int, end: int) -> dict[int, int]:
@@ -50,8 +55,9 @@ def price_series(days: list[tuple[int, int, int]], start: int, end: int) -> dict
             # drop old days while the window still has MIN_SALES without them
             while len(window) > 1 and vol - window[0][2] >= MIN_SALES:
                 vol -= window.popleft()[2]
-        if window:
-            out[d] = round(weighted_median((m, v) for _, m, v in window))
+        price = weighted_median((m, v) for _, m, v in window)
+        if price is not None:
+            out[d] = round(price)
     return out
 
 

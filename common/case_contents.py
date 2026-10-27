@@ -65,7 +65,7 @@ def _variants(skin: dict | None, base_name: str, stattrak_ok: bool) -> dict[str,
 
 def build(crates: list[dict], skins: list[dict]) -> dict[str, dict[str, float]]:
     """{case name: {market_hash_name: drop probability}}. Probabilities of each case sum to 1."""
-    by_name = {}
+    by_name: dict[str, dict] = {}
     for s in skins:
         by_name.setdefault(s["name"], s)  # Doppler phases are one market listing
     result = {}
@@ -85,7 +85,7 @@ def build(crates: list[dict], skins: list[dict]) -> dict[str, dict[str, float]]:
             share = RARITY_ODDS.get(g, 0) / total / len(names)
             for n in names:
                 skin = by_name.get(n)
-                gloves = bool(skin) and skin.get("category", {}).get("name") == "Gloves"
+                gloves = skin is not None and skin.get("category", {}).get("name") == "Gloves"
                 stattrak_ok = (skin or {}).get("stattrak", g != "rare_special") and not gloves
                 for mhn, p in _variants(skin, n, stattrak_ok).items():
                     probs[mhn] += share * p
