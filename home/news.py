@@ -20,7 +20,7 @@ PAGE = 100
 
 
 def _fetch_page(client: httpx.Client, enddate: int | None) -> list[dict]:
-    params = {"appid": 730, "count": PAGE, "maxlength": 0, "feeds": FEED}
+    params: dict[str, int | str] = {"appid": 730, "count": PAGE, "maxlength": 0, "feeds": FEED}
     if enddate:
         params["enddate"] = enddate
     r = client.get(NEWS_URL, params=params)
