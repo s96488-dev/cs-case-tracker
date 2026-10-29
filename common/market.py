@@ -30,7 +30,8 @@ def smoothed(prices: dict[int, dict[int, float]]) -> dict[int, dict[int, float]]
 
 def market_index(prices: dict[int, dict[int, float]]) -> list[dict]:
     """prices: {day: {case id: daily price}} -> [{time, value, cases}] ascending, starting at START."""
-    out, log_level, prev = [], math.log(START), {}
+    out, log_level = [], math.log(START)
+    prev: dict[int, float] = {}
     for day, cur in sorted(smoothed(prices).items()):
         moves = [math.log(cur[i] / prev[i]) for i in cur if i in prev]
         if moves:
