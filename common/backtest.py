@@ -1,7 +1,8 @@
 """Backtest of case-buying signals on daily Steam prices, and a genetic search over signal parameters.
 
 A trade buys a case the day after a signal at that day's price and sells it `hold` days later; the seller
-gets price / 1.15 (Steam and game fees). Signals are checked once a week, and a case is not bought again
+gets what Steam pays out after its 5% and the game's 10% fee, each at least 1 cent (`proceeds`), so a case sold
+for $0.03 pays out $0.01. Signals are checked once a week, and a case is not bought again
 while it is held, so one long rally does not count as dozens of trades.
 
 Every result is compared with a baseline: buying every case every week with the same holding period. Case
@@ -9,18 +10,43 @@ prices rose a lot over the years, so almost any rule makes money on paper; a sig
 buying at random.
 
 The genetic search fits parameters on the training period (trades that close before `split`) and reports
-them on the test period (trades opened after `split`), which the search never saw.
+them on the test period (trades opened after `split`), which the search never saw. Its fitness is measured over
+calendar quarters rather than single trades: trades of many cases bought during one market event are one bet,
+not dozens.
 """
 import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from .market import market_index
 
-FEE = 1.15
 STEP = 7            # days between signal checks
 DAY = 86400
+MIN_QUARTERS = 6    # a rule must trade in at least this many quarters
+
+
+def proceeds(price: float) -> float:
+    """What the seller receives for a sale at `price` dollars: the largest amount S (cents) with
+    S + max(1, S * 5%) + max(1, S * 10%) <= price, as Steam computes its and the game's fee."""
+    p = round(price * 100)
+    s = int(p / 1.15) + 3      # the floors make the fees a bit under 15%
+    while s > 0 and s + max(1, s * 5 // 100) + max(1, s * 10 // 100) > p:
+        s -= 1
+    return s / 100
+
+
+def quarter(day: int) -> int:
+    """Calendar quarter of an epoch day, counted from year 0."""
+    d = datetime.fromtimestamp(day * DAY, UTC)
+    return d.year * 4 + (d.month - 1) // 3
+
+
+def _ret(buy: float, sell: float) -> float:
+    """Net return (x) of buying at `buy` and selling at `sell`. A sale that pays out nothing counts as 0.1 cent so
+    the log stays finite; the buy price is at least 1 cent."""
+    return max(proceeds(sell), 0.001) / max(buy, 0.01)
 
 
 @dataclass
@@ -210,6 +236,7 @@ class Result:
         lg = sorted(self.logs())
         mean = sum(lg) / len(lg)
         return {"trades": self.n, "cases": len({t[0] for t in self.trades}),
+                "quarters": len({quarter(t[1]) for t in self.trades}),
                 "mean_return": math.exp(mean) - 1, "median_return": math.exp(lg[len(lg) // 2]) - 1,
                 "win_rate": sum(x > 0 for x in lg) / len(lg), "worst": math.exp(lg[0]) - 1,
                 "best": math.exp(lg[-1]) - 1}
@@ -228,7 +255,7 @@ def run(data: Data, rule: Rule, first: int, last: int, exit_by: int | None = Non
             if exit_ >= n or c.start + exit_ > limit:
                 break
             if _signal(data, k, i, rule):
-                trades.append((c.name, c.start + entry, c.start + exit_, c.price[exit_] / FEE / c.price[entry]))
+                trades.append((c.name, c.start + entry, c.start + exit_, _ret(c.price[entry], c.price[exit_])))
                 i = exit_
             else:
                 i += STEP
@@ -253,19 +280,27 @@ def baseline(data: Data, hold: int, first: int, last: int, exit_by: int | None =
             entry, exit_ = i + 1, i + 1 + hold
             if c.start + i > last or exit_ >= n or c.start + exit_ > limit:
                 break
-            trades.append((c.name, c.start + entry, c.start + exit_, c.price[exit_] / FEE / c.price[entry]))
+            trades.append((c.name, c.start + entry, c.start + exit_, _ret(c.price[entry], c.price[exit_])))
     return Result(trades)
 
 
-def fitness(res: Result, base: Result, min_trades: int = 15) -> float:
-    """t-statistic of the mean log return above the baseline's; too few trades or cases score nothing."""
-    if res.n < min_trades or len({t[0] for t in res.trades}) < 4 or not base.n:
+def fitness(res: Result, base: Result, min_quarters: int = MIN_QUARTERS) -> float:
+    """t-statistic of the mean log return above the baseline's, with calendar quarters of entry as the samples.
+
+    Trades opened in the same quarter ride the same market moves, so each quarter is one observation: its mean
+    excess log return. A rule needs trades in `min_quarters` quarters and at least 4 cases to score at all."""
+    if not base.n or len({t[0] for t in res.trades}) < 4:
         return -1e9
-    lg = res.logs()
-    excess = sum(lg) / len(lg) - sum(base.logs()) / base.n
-    m = sum(lg) / len(lg)
-    sd = math.sqrt(sum((x - m) ** 2 for x in lg) / len(lg)) or 1e-9
-    return excess / sd * math.sqrt(min(res.n, 200))
+    b = sum(base.logs()) / base.n
+    by_q: dict[int, list[float]] = {}
+    for t in res.trades:
+        by_q.setdefault(quarter(t[1]), []).append(math.log(t[3]) - b)
+    if len(by_q) < min_quarters:
+        return -1e9
+    qs = [sum(v) / len(v) for v in by_q.values()]
+    m = sum(qs) / len(qs)
+    sd = max(math.sqrt(sum((x - m) ** 2 for x in qs) / (len(qs) - 1)), 0.05)
+    return m / sd * math.sqrt(len(qs))
 
 
 def _random_rule(rng: random.Random) -> Rule:
@@ -305,7 +340,7 @@ def _cross(a: Rule, b: Rule, rng: random.Random) -> Rule:
 
 
 def evolve(data: Data, first: int, split: int, pop: int = 40, gens: int = 25, seed: int = 1,
-           log=None) -> list[tuple[float, Rule]]:
+           min_quarters: int = MIN_QUARTERS, log=None) -> list[tuple[float, Rule]]:
     """Genetic search on trades opened from `first` and closed before `split`. Returns the best distinct rules."""
     rng = random.Random(seed)
     base_cache: dict[int, Result] = {}
@@ -313,7 +348,7 @@ def evolve(data: Data, first: int, split: int, pop: int = 40, gens: int = 25, se
     def score(rule: Rule) -> float:
         if rule.hold not in base_cache:
             base_cache[rule.hold] = baseline(data, rule.hold, first, split, exit_by=split)
-        return fitness(run(data, rule, first, split, exit_by=split), base_cache[rule.hold])
+        return fitness(run(data, rule, first, split, exit_by=split), base_cache[rule.hold], min_quarters)
 
     people = [_random_rule(rng) for _ in range(pop)]
     seen: dict[str, tuple[float, Rule]] = {}
@@ -348,7 +383,7 @@ def forward_returns(data: Data, feature: str, buckets: list[float], hold: int, f
             if math.isnan(v):
                 continue
             b = sum(v >= x for x in buckets)
-            groups.setdefault(b, []).append(math.log(c.price[i + 1 + hold] / FEE / c.price[i + 1]))
+            groups.setdefault(b, []).append(math.log(_ret(c.price[i + 1], c.price[i + 1 + hold])))
     out = []
     for b in sorted(groups):
         lg = groups[b]
@@ -368,6 +403,6 @@ def drop_pool_event(data: Data, holds: list[int]) -> list[dict]:
         i = c.left_day + 1 - c.start
         row: dict = {"case": c.name, "left": c.left_day, "price": c.price[i]}
         for h in holds:
-            row[h] = c.price[i + h] / FEE / c.price[i] - 1 if i + h < len(c.price) else None
+            row[h] = _ret(c.price[i], c.price[i + h]) - 1 if i + h < len(c.price) else None
         out.append(row)
     return out

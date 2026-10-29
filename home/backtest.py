@@ -1,7 +1,7 @@
-"""Backtest report on the home database: python -m home.backtest [--split 2022-01-01] [--pop 60] [--gens 40]
+"""Backtest report on the home database: python -m home.backtest [--splits 2019-01-01,2021-01-01,2023-01-01]
 
-Writes backtest_report.md (and backtest_trades.csv with the test-period trades of the best rule) next to
-the repository. See common/backtest.py for how trades and the genetic search work.
+Writes backtest_report.md (and backtest_trades.csv with the test-period trades of the best rule of every split)
+next to the repository. See common/backtest.py for how trades and the genetic search work.
 """
 import argparse
 import csv
@@ -53,13 +53,13 @@ def pct(x) -> str:
 
 def summary_row(label: str, s: dict) -> str:
     if not s.get("trades"):
-        return f"| {label} | 0 | | | | | |"
-    return (f"| {label} | {s['trades']} | {s['cases']} | {pct(s['mean_return'])} | {pct(s['median_return'])} "
-            f"| {s['win_rate'] * 100:.0f}% | {pct(s['worst'])} |")
+        return f"| {label} | 0 | | | | | | |"
+    return (f"| {label} | {s['trades']} | {s['cases']} | {s['quarters']} | {pct(s['mean_return'])} "
+            f"| {pct(s['median_return'])} | {s['win_rate'] * 100:.0f}% | {pct(s['worst'])} |")
 
 
-SUMMARY_HEAD = ("| | trades | cases | mean | median | win rate | worst |\n"
-                "|---|---|---|---|---|---|---|")
+SUMMARY_HEAD = ("| | trades | cases | quarters | mean | median | win rate | worst |\n"
+                "|---|---|---|---|---|---|---|---|")
 
 BUCKETS: dict[str, list[float]] = {
     "market_dd": [-0.5, -0.4, -0.3, -0.2, -0.1],
@@ -71,20 +71,30 @@ BUCKETS: dict[str, list[float]] = {
 }
 
 
-def report(data: bt.Data, split: int, pop: int, gens: int, seed: int) -> tuple[str, list]:
+def _year(day: int) -> int:
+    return datetime.fromtimestamp(day * bt.DAY, UTC).year
+
+
+def report(data: bt.Data, splits: list[int], pop: int, gens: int, seed: int) -> tuple[str, list]:
     first = min(c.start for c in data.cases)
     out = ["# Backtest of case-buying signals", "",
-           f"Data: {len(data.cases)} cases, {_date(first)} to {_date(data.end)}. "
-           f"Training period: trades that close before {_date(split)}; test period: trades opened after it.",
-           f"Every trade pays the Steam fee: the seller gets price / {bt.FEE}. Mean returns are geometric "
-           "(the average of log returns), so one huge winner does not dominate.", ""]
+           f"Data: {len(data.cases)} cases, {_date(first)} to {_date(data.end)}.",
+           "Every trade pays the Steam fee: 5% to Steam and 10% to the game, each at least 1 cent, so a case sold "
+           "for $0.03 pays out $0.01. Mean returns are geometric (the average of log returns), so one huge winner "
+           "does not dominate. *quarters* is the number of calendar quarters with an entry: trades bought in the "
+           "same quarter ride the same market moves and are closer to one bet than to many.", ""]
 
     out += ["## Baseline: buy any case at random", "",
             "Buying every case every week. A signal is useful only if it does better than this.", "",
             SUMMARY_HEAD]
     for hold in (90, 180, 365, 730):
-        out.append(summary_row(f"hold {hold} d, train", bt.baseline(data, hold, first, split, split).summary()))
-        out.append(summary_row(f"hold {hold} d, test", bt.baseline(data, hold, split, data.end).summary()))
+        out.append(summary_row(f"hold {hold} d", bt.baseline(data, hold, first, data.end).summary()))
+    out += ["", "Holding 365 days, by the year of entry:", "", SUMMARY_HEAD]
+    by_year: dict[int, list] = {}
+    for t in bt.baseline(data, 365, first, data.end).trades:
+        by_year.setdefault(_year(t[1]), []).append(t)
+    for y in sorted(by_year):
+        out.append(summary_row(str(y), bt.Result(by_year[y]).summary()))
     out.append("")
 
     out += ["## Return after 365 days by the situation on the entry day", "",
@@ -121,29 +131,42 @@ def report(data: bt.Data, split: int, pop: int, gens: int, seed: int) -> tuple[s
         out.append(f"| {date(2000, m, 1):%b} | {len(v)} | {pct(math.exp(sum(v) / len(v)) - 1)} |")
     out.append("")
 
-    log.info("genetic search: %d rules x %d generations", pop, gens)
-    t0 = time.time()
-    best = bt.evolve(data, first, split, pop=pop, gens=gens, seed=seed, log=log.info)
-    out += ["## Genetic search", "",
-            f"{pop} rules x {gens} generations, {time.time() - t0:.0f} s. Fitness: how far the mean log return "
-            "beats the baseline with the same holding period, divided by the spread of returns (a t-statistic), "
-            "on the training period only. The test columns are the honest check: the search never saw them.", ""]
+    out += ["## Genetic search, walk-forward", "",
+            f"{pop} rules x {gens} generations per split. For each split the search sees only trades that close "
+            "before it and is then checked on trades opened after it. Fitness: how far the mean log return beats "
+            "the baseline with the same holding period, as a t-statistic over calendar quarters; a rule must trade "
+            f"in at least {bt.MIN_QUARTERS} quarters and 4 cases.", ""]
     trades: list = []
-    shown: list[tuple[float, bt.Rule, dict]] = []
-    for score, rule in best:         # rules with an extra condition that changes nothing are shown once
-        train = bt.run(data, rule, first, split, split).summary()
-        if all(train != s for _, _, s in shown):
-            shown.append((score, rule, train))
-    for rank, (score, rule, train) in enumerate(shown[:5], 1):
-        test = bt.run(data, rule, split, data.end)
-        base = bt.baseline(data, rule.hold, split, data.end).summary()
-        out += [f"### {rank}. {rule.describe()}", "", f"Fitness on training: {score:.2f}", "", SUMMARY_HEAD,
-                summary_row("train", train), summary_row("test", test.summary()),
-                summary_row("test baseline", base), ""]
-        if rank == 1:
-            trades = test.trades
-    if not best:
-        out += ["No rule made enough trades. Try a longer history or an earlier --split.", ""]
+    stability: list[str] = []
+    for split in splits:
+        log.info("genetic search before %s: %d rules x %d generations", _date(split), pop, gens)
+        t0 = time.time()
+        best = bt.evolve(data, first, split, pop=pop, gens=gens, seed=seed, log=log.info)
+        out += [f"### Split {_date(split)}", "", f"Search took {time.time() - t0:.0f} s.", ""]
+        shown: list[tuple[float, bt.Rule, dict]] = []
+        for score, rule in best:     # rules with an extra condition that changes nothing are shown once
+            train = bt.run(data, rule, first, split, split).summary()
+            if all(train != s for _, _, s in shown):
+                shown.append((score, rule, train))
+        for rank, (score, rule, train) in enumerate(shown[:3], 1):
+            test = bt.run(data, rule, split, data.end)
+            base = bt.baseline(data, rule.hold, split, data.end).summary()
+            out += [f"**{rank}. {rule.describe()}**", "", f"Fitness on training: {score:.2f}", "", SUMMARY_HEAD,
+                    summary_row("train", train), summary_row("test", test.summary()),
+                    summary_row("test baseline", base), ""]
+            if rank == 1:
+                trades += [(_date(split), *t) for t in test.trades]
+                ts = test.summary()
+                stability.append(f"| {_date(split)} | {rule.describe()} | {pct(train.get('mean_return'))} "
+                                 f"| {pct(ts.get('mean_return'))} | {ts.get('quarters', 0)} "
+                                 f"| {pct(base.get('mean_return'))} |")
+        if not best:
+            out += ["No rule traded in enough quarters before this split.", ""]
+            stability.append(f"| {_date(split)} | none | | | | |")
+    out += ["### All splits", "", "The best rule of each split. A real signal should look alike across splits and "
+            "beat the baseline in every test period.", "",
+            "| split | rule | train | test | test quarters | test baseline |", "|---|---|---|---|---|---|",
+            *stability, ""]
     out += ["## How to read this", "",
             "- A rule is worth something only if its **test** mean beats the **test baseline** with the same "
             "holding period, with a decent number of trades over several cases.",
@@ -156,7 +179,8 @@ def report(data: bt.Data, split: int, pop: int, gens: int, seed: int) -> tuple[s
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--split", default="2022-01-01", help="start of the test period, YYYY-MM-DD")
+    p.add_argument("--splits", default="2019-01-01,2021-01-01,2023-01-01",
+                   help="comma-separated starts of the test periods, YYYY-MM-DD")
     p.add_argument("--pop", type=int, default=60)
     p.add_argument("--gens", type=int, default=40)
     p.add_argument("--seed", type=int, default=1)
@@ -171,15 +195,16 @@ def main():
         pool.close()
     log.info("loaded %d cases, computing features", len(cases))
     data = bt.prepare(cases)
-    text, trades = report(data, _day(date.fromisoformat(args.split)), args.pop, args.gens, args.seed)
+    splits = [_day(date.fromisoformat(x.strip())) for x in args.splits.split(",")]
+    text, trades = report(data, splits, args.pop, args.gens, args.seed)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(text)
     with open(args.out.rsplit(".", 1)[0].replace("report", "trades") + ".csv", "w", newline="",
               encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["case", "entry", "exit", "net_return"])
-        for name, a, b, r in trades:
-            w.writerow([name, _date(a), _date(b), f"{r - 1:.4f}"])
+        w.writerow(["split", "case", "entry", "exit", "net_return"])
+        for split, name, a, b, r in trades:
+            w.writerow([split, name, _date(a), _date(b), f"{r - 1:.4f}"])
     log.info("report written to %s", args.out)
 
 
