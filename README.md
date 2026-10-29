@@ -108,6 +108,20 @@ each skin in each wear, StatTrak, knives and gloves.
 - Scale modes: auto, log, percent from the first visible bar, EV on its own scale. A TradingView-style
   legend with values under the crosshair and an eye to hide each series. Settings persist in the browser.
 
+## Backtest
+
+`backtest.bat` (or `python -m home.backtest`) tests case-buying signals on the home database and writes
+`backtest_report.md`:
+
+- a baseline: buying any case every week, for holding periods from 90 to 730 days;
+- returns after 365 days grouped by the situation on the entry day: market drawdown, case drawdown, case vs
+  market, price / EV, momentum, market turnover;
+- buying right after a case left the active drop pool, and the market index by calendar month;
+- a genetic search over rules ("buy when these conditions hold, sell after N days"), fitted on the years
+  before `--split` and reported on the years after it, against the baseline with the same holding period.
+
+Every trade pays the Steam fee (the seller gets price / 1.15). Signals use only data up to the entry day.
+
 ## Running it
 
 **Cloud** (Debian VM with Docker):
@@ -165,6 +179,7 @@ Cloud (all but `/health` need `Authorization: Bearer <API_TOKEN>`): `GET /health
 | `common/case_contents.py` | case contents and drop odds per market listing |
 | `common/ev.py` | daily item prices and EV |
 | `common/drop_pool.py` | active drop pool history and forecast |
+| `common/backtest.py`, `home/backtest.py` | signal backtest, genetic search, report |
 | `cloud/` | collector, SQLite buffer, pull API |
 | `home/` | sync worker, PostgreSQL schema, EV job, news, chart API and page |
 | `tests/` | unit tests and the end-to-end pipeline test |

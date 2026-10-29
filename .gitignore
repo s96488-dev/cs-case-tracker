@@ -9,3 +9,5 @@ update.log
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+backtest_report.md
+backtest_trades.csv
