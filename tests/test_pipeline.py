@@ -13,6 +13,7 @@ if not os.getenv("TEST_DATABASE_URL"):
 from cloud import config as cloud_config  # noqa: E402
 from cloud import server  # noqa: E402
 from cloud.buffer import Buffer  # noqa: E402
+from common import market  # noqa: E402
 from common.models import Case, PriceTick, SalePoint  # noqa: E402
 from home import api, ev, sync  # noqa: E402
 from home import config as home_config  # noqa: E402
@@ -94,6 +95,7 @@ def test_daily_sales_point_replaces_hourly_points_of_that_day(cloud, home):
 
 
 def test_item_prices_ev_and_market_index(cloud, home, monkeypatch):
+    monkeypatch.setattr(market, "SEASON_DAYS", 0)
     server.buf.save([PriceTick("A Case", T0, 100), PriceTick("B Case", T0, 200)], [Case("A Case"), Case("B Case")])
     sync.sync_once(cloud)
     for name, price in (("Skin 1", 300), ("Skin 2", 500)):
@@ -111,6 +113,7 @@ def test_item_prices_ev_and_market_index(cloud, home, monkeypatch):
         server.buf.save_sales(name, [SalePoint(name, T0 + d * DAY + H, p, 5, span=DAY) for d, p in enumerate(prices)])
     sync.sync_sales_once(cloud)
     m = home.get("/api/market").json()
-    # both cases +10%; with two days of history the smoothing median sits halfway
-    assert [round(x["value"], 1) for x in m] == [100.0, 105.0]
+    # both cases +10%; with two days of history the smoothed price is their geometric mean
+    assert [round(x["value"], 1) for x in m] == [100.0, 104.9]
+    assert [x["turnover"] for x in m] == [15.0, 16.5]
     assert home.get("/api/drop", params={"item_id": ids["A Case"]}).json() is None

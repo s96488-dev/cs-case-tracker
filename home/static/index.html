@@ -138,7 +138,7 @@ const ratioTimes = ratioChart.addLineSeries({ lastValueVisible: false, priceLine
 // Needed so the lower panel has a left scale of the same width as the main chart.
 const ratioLeft = ratioChart.addLineSeries({ priceScaleId: "left", lastValueVisible: false, priceLineVisible: false,
   color: "rgba(0,0,0,0)", crosshairMarkerVisible: false });
-ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
+const oneLine = ratioLine.createPriceLine({ price: 1, color: "#8a8f98", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "" });
 // Indicator and scale settings, remembered in the browser.
 const opts = { smType: "", smLen: 7, keyOn: false, keyPrice: 2.49, feeOn: false, log: false, pct: false, sep: false,
   low: "ev", hidden: [] };
@@ -360,14 +360,20 @@ async function loadMarketChart(fit) {
   for (const s of [candles, median, volume, evLine, evRaw, dropLine]) { s.setData([]); s.setMarkers([]); }
   hist = []; evData = [];
   mktData = await (await fetch("/api/market")).json();
-  mktLine.applyOptions({ priceScaleId: "right", lineWidth: 2, lastValueVisible: true });
+  mktLine.applyOptions({ priceScaleId: "right", lineWidth: 2, lastValueVisible: true,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
   mktLine.setData(mktData.map(d => ({ time: d.time, value: d.value })));
   for (const e of mainLegend) e.row.style.display = e.key === "mkt" ? "" : "none";
+  tfs.style.display = "none";   // the index is daily, timeframes do not apply
+  oneLine.applyOptions({ lineVisible: false, axisLabelVisible: false });
+  ratioLine.applyOptions({ priceFormat: { type: "volume" } });
   lowLegend[0].digits = 0;
-  setLow(mktData.map(d => ({ time: d.time, value: d.cases })), "Cases in index");
-  $("ratioLabel").textContent = "Number of cases with sales on that day";
-  $("hint").textContent = "All cases equally weighted, chain-linked by day, starts at 100. Each case's price is the "
-    + "median of its last 7 days with sales, so one odd trade does not move the index.";
+  setLow(mktData.map(d => ({ time: d.time, value: d.turnover })), "Turnover, $/day");
+  const lastM = mktData[mktData.length - 1];
+  $("ratioLabel").textContent = "Dollars traded over all cases per day: new cases and big events show up here";
+  $("hint").textContent = "All cases equally weighted, chain-linked by day, starts at 100. A case joins 180 days "
+    + "after its first sale, so the price fall of new cases does not drag the index down. "
+    + (lastM ? `Cases in the index now: ${lastM.cases}.` : "");
   syncTimes();
   if (fit) chart.timeScale().fitContent();
   updateLegend(mainLegend); updateLegend(lowLegend);
@@ -378,8 +384,11 @@ async function loadChart(fit) {
   document.getElementById("title").textContent = current.market_hash_name;
   if (isMarket()) return loadMarketChart(fit);
   for (const e of mainLegend) e.row.style.display = "";
+  tfs.style.display = "";
+  oneLine.applyOptions({ lineVisible: true, axisLabelVisible: true });
+  ratioLine.applyOptions({ priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
   lowLegend[0].digits = 2;
-  mktLine.applyOptions({ lineWidth: 1, lastValueVisible: false });
+  mktLine.applyOptions({ lineWidth: 1, lastValueVisible: false, priceFormat: { type: "price", precision: 1, minMove: 0.1 } });
   applyScale();
   const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
   candles.setData(bars);

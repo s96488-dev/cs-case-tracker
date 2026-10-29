@@ -150,19 +150,23 @@ _market_cache: dict = {"at": 0.0, "data": []}
 
 @app.get("/api/market")
 def api_market():
-    """Daily market index of cases (see common/market.py). Recomputed every 10 minutes."""
+    """Daily market index of cases (see common/market.py) and turnover: dollars traded over all cases that day.
+    Recomputed every 10 minutes."""
     if time.time() - _market_cache["at"] < 600:
         return _market_cache["data"]
     rows = q("""SELECT s.item_id, extract(epoch FROM date_trunc('day', s.ts AT TIME ZONE 'UTC'))::bigint AS day,
-                       sum(s.median_cents::bigint * s.volume)::float / NULLIF(sum(s.volume), 0) AS price
+                       sum(s.median_cents::bigint * s.volume)::float / NULLIF(sum(s.volume), 0) AS price,
+                       sum(s.median_cents::bigint * s.volume) / 100.0 AS dollars
                 FROM sales_history s JOIN items i ON i.id = s.item_id
                 WHERE i.item_type = 'case' AND s.median_cents IS NOT NULL AND s.volume > 0
                 GROUP BY 1, 2 ORDER BY 2""")
     by_day: dict[int, dict[int, float]] = {}
+    turnover: dict[int, float] = {}
     for r in rows:
         if r["price"]:
             by_day.setdefault(r["day"], {})[r["item_id"]] = r["price"]
-    out = market_index(by_day)
+            turnover[r["day"]] = turnover.get(r["day"], 0.0) + float(r["dollars"])
+    out = market_index(by_day, turnover)
     _market_cache.update(at=time.time(), data=out)
     return out
 
