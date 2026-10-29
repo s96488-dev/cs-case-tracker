@@ -117,10 +117,13 @@ each skin in each wear, StatTrak, knives and gloves.
 - returns after 365 days grouped by the situation on the entry day: market drawdown, case drawdown, case vs
   market, price / EV, momentum, market turnover;
 - buying right after a case left the active drop pool, and the market index by calendar month;
-- a genetic search over rules ("buy when these conditions hold, sell after N days"), fitted on the years
-  before `--split` and reported on the years after it, against the baseline with the same holding period.
+- a genetic search over rules ("buy when these conditions hold, sell after N days"), walk-forward: for each
+  date in `--splits` it is fitted on the years before and reported on the years after, against the baseline
+  with the same holding period. Fitness counts calendar quarters, not trades, so twenty cases bought during one
+  market event count as one bet.
 
-Every trade pays the Steam fee (the seller gets price / 1.15). Signals use only data up to the entry day.
+Every trade pays the Steam fee: 5% to Steam and 10% to the game, each at least 1 cent (a $0.03 sale pays out
+$0.01). Signals use only data up to the entry day.
 
 ## Running it
 
