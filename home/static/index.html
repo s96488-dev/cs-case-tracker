@@ -12,6 +12,7 @@
   aside { width:320px; border-right:1px solid var(--line); overflow:auto; background:var(--panel); }
   aside .row { display:flex; gap:8px; align-items:center; padding:8px 12px; cursor:pointer; border-bottom:1px solid var(--line); }
   aside .row:hover, aside .row.active { background:#1f2430; }
+  aside .row.market { border-top:2px solid var(--line); }
   aside img { width:36px; height:28px; object-fit:contain; }
   .name { flex:1; }
   .price { text-align:right; font-variant-numeric:tabular-nums; }
@@ -87,6 +88,9 @@
 <script>
 const TFS = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "1D" };
 let current = null, tf = "60";
+// The market index has its own entry at the end of the case list.
+const MARKET = { id: "market", market_hash_name: "Market index (all cases)" };
+const isMarket = () => current && current.id === MARKET.id;
 const HOURLY = ["60", "240", "1D"];
 
 const chart = LightweightCharts.createChart(document.getElementById("chart"), {
@@ -187,6 +191,7 @@ function setLow(data, name) {
 // Last loaded data: indicator settings changes re-render without new requests.
 let evData = [], hist = [], mktData = [];
 function renderEv() {
+  if (isMarket()) return;
   const fee = opts.feeOn ? 1 / 1.15 : 1, key = opts.keyOn ? opts.keyPrice : 0;
   const raw = evData.map(e => ({ time: e.time, value: e.ev }));
   const sm = smooth(raw);
@@ -234,10 +239,12 @@ function syncTimes() {
   const all = new Set();
   for (const s of [candles, median, volume, evLine, evRaw, dropLine, mktLine])
     for (let i = 0, d = s.data(); i < d.length; i++) all.add(d[i].time);
-  ratioTimes.setData([...all].sort((a, b) => a - b).map(time => ({ time })));
+  // New bars move the lower panel's range; that must not be copied back onto the main chart.
+  syncing = true;
+  try { ratioTimes.setData([...all].sort((a, b) => a - b).map(time => ({ time }))); } finally { syncing = false; }
   medianAt = new Map(median.data().map(d => [d.time, d.value]));
   const r = chart.timeScale().getVisibleLogicalRange();
-  if (r) ratioChart.timeScale().setVisibleLogicalRange(r);
+  if (r) { syncing = true; try { ratioChart.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; } }
 }
 chart.subscribeCrosshairMove(p => {
   updateLegend(mainLegend, p);
@@ -332,12 +339,48 @@ async function loadItems() {
     row.onclick = () => { current = it; loadItems(); loadNews().then(() => loadChart(true)); };
     list.appendChild(row);
   }
+  const mkt = await (await fetch("/api/market")).json();
+  if (mkt.length) {
+    const lastV = mkt[mkt.length - 1].value, prevV = mkt.length > 1 ? mkt[mkt.length - 2].value : lastV;
+    const chg = (lastV / prevV - 1) * 100;
+    const row = document.createElement("div");
+    row.className = "row market" + (isMarket() ? " active" : "");
+    row.innerHTML = `<img alt="" style="visibility:hidden"><span class="name"></span>
+      <span class="price">${lastV.toFixed(1)}<br><span class="chg ${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span></span>`;
+    row.querySelector(".name").textContent = MARKET.market_hash_name;
+    row.title = "All cases equally weighted, daily, starts at 100";
+    row.onclick = () => { current = MARKET; loadItems(); loadNews().then(() => loadChart(true)); };
+    list.appendChild(row);
+  }
   if (!current && items.length) { current = items[0]; loadItems(); loadNews().then(() => loadChart(true)); }
+}
+
+// Market index on its own: the only line on the main chart, the number of cases in the index below.
+async function loadMarketChart(fit) {
+  for (const s of [candles, median, volume, evLine, evRaw, dropLine]) { s.setData([]); s.setMarkers([]); }
+  hist = []; evData = [];
+  mktData = await (await fetch("/api/market")).json();
+  mktLine.applyOptions({ priceScaleId: "right", lineWidth: 2, lastValueVisible: true });
+  mktLine.setData(mktData.map(d => ({ time: d.time, value: d.value })));
+  for (const e of mainLegend) e.row.style.display = e.key === "mkt" ? "" : "none";
+  lowLegend[0].digits = 0;
+  setLow(mktData.map(d => ({ time: d.time, value: d.cases })), "Cases in index");
+  $("ratioLabel").textContent = "Number of cases with sales on that day";
+  $("hint").textContent = "All cases equally weighted, chain-linked by day, starts at 100. Each case's price is the "
+    + "median of its last 7 days with sales, so one odd trade does not move the index.";
+  syncTimes();
+  if (fit) chart.timeScale().fitContent();
+  updateLegend(mainLegend); updateLegend(lowLegend);
 }
 
 async function loadChart(fit) {
   if (!current) return;
   document.getElementById("title").textContent = current.market_hash_name;
+  if (isMarket()) return loadMarketChart(fit);
+  for (const e of mainLegend) e.row.style.display = "";
+  lowLegend[0].digits = 2;
+  mktLine.applyOptions({ lineWidth: 1, lastValueVisible: false });
+  applyScale();
   const bars = await (await fetch(`/api/candles?item_id=${current.id}&tf=${tf}`)).json();
   candles.setData(bars);
   // Steam sales history is hourly, so the median and volume exist only on 1h and above.
@@ -387,12 +430,12 @@ async function loadChart(fit) {
     ? (!hist.length ? "No sales history yet: the cloud needs a Steam cookie."
        : hist.some(h => h.daily) ? "Brown bars are whole-day sales: Steam keeps only daily history older than ~30 days." : "")
     : "Sales volume and median are available on 1h, 4h and 1D only.");
+  syncTimes();
   if (fit) {
     // Candles exist only since the collector started, sales history spans years: show the last ~200 bars.
     const last = bars.length ? bars[bars.length - 1].time : (hist.length ? hist[hist.length - 1].time : null);
     if (last) chart.timeScale().setVisibleRange({ from: last - 200 * step, to: last + step });
   }
-  syncTimes();
   updateLegend(mainLegend); updateLegend(lowLegend);
 }
 
@@ -414,7 +457,7 @@ const plain = t => t.replace(/\{STEAM_CLAN_IMAGE\}\S*/g, "").replace(/\[img\][\s
 
 async function loadNews() {
   if (!current) return;
-  newsItems = await (await fetch(`/api/news?item_id=${current.id}`)).json();
+  newsItems = await (await fetch(isMarket() ? "/api/news?limit=50" : `/api/news?item_id=${current.id}`)).json();
   const box = document.getElementById("newsList");
   box.innerHTML = newsItems.length ? "" : '<div class="empty">No news for this case yet.</div>';
   for (const n of newsItems) {
