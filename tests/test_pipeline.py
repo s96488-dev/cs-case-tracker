@@ -111,5 +111,6 @@ def test_item_prices_ev_and_market_index(cloud, home, monkeypatch):
         server.buf.save_sales(name, [SalePoint(name, T0 + d * DAY + H, p, 5, span=DAY) for d, p in enumerate(prices)])
     sync.sync_sales_once(cloud)
     m = home.get("/api/market").json()
-    assert [round(x["value"], 1) for x in m] == [100.0, 110.0]
+    # both cases +10%; with two days of history the smoothing median sits halfway
+    assert [round(x["value"], 1) for x in m] == [100.0, 105.0]
     assert home.get("/api/drop", params={"item_id": ids["A Case"]}).json() is None

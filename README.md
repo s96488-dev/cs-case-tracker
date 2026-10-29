@@ -99,6 +99,8 @@ each skin in each wear, StatTrak, knives and gloves.
 - Lower panel: *price / EV* (or *(case + key) / EV*), or *case / market index*. It pans, zooms and shows
   the crosshair together with the main chart.
 - **Market index**: all cases equally weighted, chain-linked daily from mean log returns, starting at 100.
+  Each case's price is the median of its last 7 days with sales, so one odd trade does not move it. It also
+  has its own entry at the end of the case list, with the number of cases in the index in the lower panel.
 - **Drop pool line**: when a regular case left the active drop pool, or a forecast for cases still in it
   (release date + the average lifetime of past regular cases, ~1050 days; `common/drop_pool.py`).
 - Valve news mentioning the case, as markers and a side panel.
