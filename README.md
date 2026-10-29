@@ -99,8 +99,9 @@ each skin in each wear, StatTrak, knives and gloves.
 - Lower panel: *price / EV* (or *(case + key) / EV*), or *case / market index*. It pans, zooms and shows
   the crosshair together with the main chart.
 - **Market index**: all cases equally weighted, chain-linked daily from mean log returns, starting at 100.
-  Each case's price is the median of its last 7 days with sales, so one odd trade does not move it. It also
-  has its own entry at the end of the case list, with the number of cases in the index in the lower panel.
+  Each case's price is smoothed over its last 7 days with sales, and a case joins 180 days after its first sale,
+  so the price fall of newly released cases does not drag the index down. It also has its own entry at the end
+  of the case list, daily only, with the market turnover ($ traded per day) in the lower panel.
 - **Drop pool line**: when a regular case left the active drop pool, or a forecast for cases still in it
   (release date + the average lifetime of past regular cases, ~1050 days; `common/drop_pool.py`).
 - Valve news mentioning the case, as markers and a side panel.
@@ -146,7 +147,7 @@ Home (port 8080):
 | `GET /api/candles?item_id=7&tf=60` | OHLC of the lowest price; `tf`: `1`, `5`, `15`, `60`, `240` minutes or `1D` |
 | `GET /api/sales?item_id=7&tf=1D` | sales history: median and units sold |
 | `GET /api/ev?item_id=7` | daily EV in USD and `coverage` (priced share of probability) |
-| `GET /api/market` | daily market index (`value`, starts at 100) and number of cases |
+| `GET /api/market` | daily market index (`value`, starts at 100), number of cases and `turnover` ($ traded) |
 | `GET /api/drop?item_id=7` | `released`, `left_active` or `forecast`, `mean_days` |
 | `GET /api/news?item_id=7` | Valve news mentioning the case, newest first |
 | `GET /api/status` | number of snapshots and the latest one |
